@@ -1,0 +1,15 @@
+# Hosh's Blog
+
+> Notes, essays, and the occasional teapot.
+
+
+## Blog
+
+
+## Root Pages
+- [Hey, I’m Hosh!](https://hoshsadiq.github.io/about/): I am a platform and systems engineer working at the intersection of infrastructure, security, and … - Published 2026-02-06
+- [Conference Talks](https://hoshsadiq.github.io/talks/): Talks I&rsquo;ve given or co-presented at conferences and meetups, mostly about infrastructure, … - Published 2026-02-06
+
+---
+Generated on 2026-04-05 12:07:23 UTC
+Site: https://hoshsadiq.github.io/
