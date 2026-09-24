@@ -1,0 +1,17 @@
+# Hosh's Blog
+
+> Notes, essays, and the occasional teapot.
+
+
+## Blog
+- [Talos Linux won't boot: all-zero UUID on Hetzner dedicated servers](https://hoshsadiq.github.io/blog/talos-uuid-hetzner/): I just needed to upgrade my Kubernetes cluster. My Hetzner dedicated server had other ideas. - Published 2026-02-22
+- [Tailscale exit nodes on GL.iNet routers](https://hoshsadiq.github.io/blog/tailscale-exit-node-openwrt/): I just needed to route all LAN client traffic on my router through the Tailscale exit node. My … - Published 2026-02-07
+- [Hetzner's odd default Firewall rule](https://hoshsadiq.github.io/blog/k3s-hetzner-egress-debugging/): Pods in my k3s cluster on a Hetzner dedicated server were failing to reach external services. … - Published 2025-08-26
+
+## Root Pages
+- [Hey, I'm Hosh!](https://hoshsadiq.github.io/about/): I&rsquo;m a platform and systems engineer. Most of my work is making complex systems understandable, … - Published 2026-02-06
+- [Conference Talks](https://hoshsadiq.github.io/talks/): Talks I&rsquo;ve given or co-presented at conferences and meetups, mostly about infrastructure, … - Published 2026-02-06
+
+---
+Generated on 2026-09-24 21:33:46 UTC
+Site: https://hoshsadiq.github.io/

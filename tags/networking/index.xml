@@ -1,0 +1,1082 @@
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Hosh's Blog – Networking</title><link>https://hoshsadiq.github.io/tags/networking/</link><description>Recent content in Networking on Hosh's Blog</description><generator>Hugo -- gohugo.io</generator><language>en-gb</language><lastBuildDate>Sat, 07 Feb 2026 00:00:00 +0000</lastBuildDate><atom:link href="https://hoshsadiq.github.io/tags/networking/index.xml" rel="self" type="application/rss+xml"/><item><title>Tailscale exit nodes on GL.iNet routers</title><link>https://hoshsadiq.github.io/blog/tailscale-exit-node-openwrt/</link><pubDate>Sat, 07 Feb 2026 00:00:00 +0000</pubDate><guid>https://hoshsadiq.github.io/blog/tailscale-exit-node-openwrt/</guid><description>
+&lt;p&gt;I just needed to route all LAN client traffic on my router through the Tailscale exit node. My GL.iNet router had other ideas.&lt;/p&gt;
+&lt;p&gt;I work remotely, and travel during the weekends. To keep my tech consistent everywhere I go, I always carry around a smaller router (the GL.iNet MT3000) running openWRT.&lt;/p&gt;
+&lt;p&gt;This router has saved in more ways though, as it has a built-in VPN clients for various VPN provider including my preferred provider, Mullvad. In some countries some services are blocked, sometimes by the client or sometimes by the country, so VPN becomes essential.&lt;/p&gt;
+&lt;p&gt;Using Mullvad, however convenient, does sometimes introduce issues. For example:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;YouTube refuses to let you watch unless you sign in (yes, I&amp;rsquo;m aware of Invidious).&lt;/li&gt;
+&lt;li&gt;You get vastly more captcha solving.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;There are probably other issues that I am forgetting, but, to address this, I asked a family member to help me out. Run a Pi in their home, so I can run Tailscale and use it as an exit node.&lt;/p&gt;
+&lt;p&gt;So, once the Pi was set up, and booted, I was given SSH access by said family member, and from there installing Tailscale was very simple, and once configured to act as an exit node, it was as easy as updating my laptop&amp;rsquo;s Tailscale config to use said exit node.&lt;/p&gt;
+&lt;p&gt;And the exit node worked perfectly too! As my family member has a Gigabit Fibre broadband, I was able to max out my measly 50mbps. So next, let&amp;rsquo;s configure it on the router so that all LAN devices are able to use the exit node automatically. Once configured&amp;hellip; nothing&amp;hellip; There was no network.&lt;/p&gt;
+&lt;p&gt;This post is the investigation to see why this was not working. It took several hours, multiple wrong hypotheses, and a fix that turned out to be one iptables rule.&lt;/p&gt;
+&lt;h2&gt;The setup&lt;span class="hx:absolute hx:-mt-20" id="the-setup"&gt;&lt;/span&gt;
+&lt;a href="#the-setup" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;LAN clients (192.168.8.0/24)
+|
+v (br-lan)
+GL.iNet MT3000 router (192.168.8.1 / Tailscale: 100.84.202.35)
+|
+v (apclix0 -- repeater uplink to 192.168.1.0/24)
+Upstream router (192.168.1.1) --&amp;gt; Internet (public IP: 74.247.222.60)
+Tailscale exit node:
+Raspberry Pi (Tailscale: 100.76.113.4 / public IP: 104.147.211.28)&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;ul&gt;
+&lt;li&gt;Router: GL.iNet MT3000, OpenWRT 21.02-SNAPSHOT, Tailscale 1.80.3&lt;/li&gt;
+&lt;li&gt;Exit node: Raspberry Pi, advertising itself as an exit node on the same tailnet&lt;/li&gt;
+&lt;li&gt;Router is configured as a repeater (WAN side is 192.168.1.0/24, LAN side is 192.168.8.0/24)&lt;/li&gt;
+&lt;li&gt;All LAN clients use 192.168.8.1 as their default gateway&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;The goal: when I enable the Tailscale exit node on the router, every device on 192.168.8.0/24 should egress through the Pi&amp;rsquo;s internet connection instead of the router&amp;rsquo;s WAN.&lt;/p&gt;
+&lt;h2&gt;What the docs say&lt;span class="hx:absolute hx:-mt-20" id="what-the-docs-say"&gt;&lt;/span&gt;
+&lt;a href="#what-the-docs-say" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;At this point I have almost exclusively used the GL.iNet UI. Later, I&amp;rsquo;ll realise that this was probably a mistake, and I should have followed OpenWRT&amp;rsquo;s instructions.&lt;/p&gt;
+&lt;h2&gt;What Tailscale support said&lt;span class="hx:absolute hx:-mt-20" id="what-tailscale-support-said"&gt;&lt;/span&gt;
+&lt;a href="#what-tailscale-support-said" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Having made sure I followed all the configuration necessary, and validating the information, I was stumped. I contact Tailscale support (super impressed that they have support for free customers by the way!!). They said the router can only use the exit node for its own traffic (I already knew this). For LAN devices to route through the exit node, I would need to configure the router as a subnet router (advertising 192.168.8.0/24) and disable SNAT. I was expecting both of these configurations to be done by default when enabling Tailscale&amp;rsquo;s exit node in the router&amp;rsquo;s UI. The admin panel certainly showed the routes were advertised.&lt;/p&gt;
+&lt;h2&gt;Checking the baseline&lt;span class="hx:absolute hx:-mt-20" id="checking-the-baseline"&gt;&lt;/span&gt;
+&lt;a href="#checking-the-baseline" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;With Tailscale enabled on the router (but no exit node set), the routing rules looked like this:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-shell" data-lang="shell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;root@GL-MT3000:~# ip rule show
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="c1"&gt;# ...&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5270: from all lookup &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;6000: from all fwmark 0x8000/0xf000 lookup main
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="c1"&gt;# ...&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;9920: from all iif br-lan blackhole
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="c1"&gt;# ...&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Rule 5270 consults table 52 for all traffic. This is the route table created and managed by Tailscale.
+Rule 6000 is GL.iNet&amp;rsquo;s default policy, which routes marked traffic via the main table.
+Rule 9920 is a kill-switch: if nothing matched above, blackhole LAN traffic (prevents leaks when a VPN tunnel is configured).&lt;/p&gt;
+&lt;p&gt;Notice rule 5270 has no &lt;code&gt;fwmark&lt;/code&gt; condition and it is &lt;code&gt;from all&lt;/code&gt;. This means table 52 is consulted regardless of what GL.iNet&amp;rsquo;s rules do to the packet mark. If table 52 has a matching route, it wins before rule 6000 ever fires.&lt;/p&gt;
+&lt;p&gt;Let&amp;rsquo;s see what in the route table 52.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;root@GL-MT3000:~# ip route show table &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.73.38.121 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.76.113.4 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.100.100.100 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.124.213.124 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.126.184.59 dev tailscale0&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Without an exit node, it only contains routes to specific Tailscale peers, no default route. Internet traffic from LAN clients follows the normal path: the GL.iNet VPN policy routing marks packets with &lt;code&gt;0x8000/0xf000&lt;/code&gt; in the mangle table, which ip rule priority 6000 matches to send through the main routing table, hitting &lt;code&gt;default via 192.168.1.1 dev apclix0&lt;/code&gt;: the normal WAN egress.&lt;/p&gt;
+&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Mangle table? That&amp;rsquo;s not a real word.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;The user iptablesnoob &lt;a href="https://serverfault.com/a/774964"
+&lt;p&gt;target=&amp;quot;_blank&amp;quot; rel=&amp;ldquo;noopener&amp;rdquo;&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;puts this quite well&lt;/a&gt;:&lt;/p&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;blockquote&gt;
+&lt;p&gt;The mangle table allows to modify some special entries in the header of packets. (such: Type of Service, Time To Live ) (it also allows to set special marks and security context marks)&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;h2&gt;Enabling the exit node&lt;span class="hx:absolute hx:-mt-20" id="enabling-the-exit-node"&gt;&lt;/span&gt;
+&lt;a href="#enabling-the-exit-node" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Let&amp;rsquo;s see what changes in the Tailscale route table when I enabled the exit node.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# tailscale debug prefs
+{
+&amp;#34;ControlURL&amp;#34;: &amp;#34;https://controlplane.tailscale.com&amp;#34;,
+&amp;#34;RouteAll&amp;#34;: true,
+&amp;#34;ExitNodeID&amp;#34;: &amp;#34;npbtV5ZPiC21CNTRL&amp;#34;,
+&amp;#34;ExitNodeIP&amp;#34;: &amp;#34;&amp;#34;,
+&amp;#34;LoggedOut&amp;#34;: false,
+&amp;#34;AdvertiseRoutes&amp;#34;: [
+&amp;#34;192.168.1.0/24&amp;#34;,
+&amp;#34;192.168.8.0/24&amp;#34;
+],
+&amp;#34;NoSNAT&amp;#34;: false
+// ...
+}&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The &lt;code&gt;AdvertiseRoutes&lt;/code&gt; seems correct, though I wasn&amp;rsquo;t expected the WAN subnet to be advertised. But &lt;code&gt;NoSNAT&lt;/code&gt; seems wrong.&lt;/p&gt;
+&lt;h2&gt;Hypothesis 1: SNAT issues&lt;span class="hx:absolute hx:-mt-20" id="hypothesis-1-snat-issues"&gt;&lt;/span&gt;
+&lt;a href="#hypothesis-1-snat-issues" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;SNAT is surely the issue if the support engineer mentioned it?&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Indeed! I thought I had set this already.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;p&gt;So we&amp;rsquo;ve enabled exit node within the UI, but there is no way to set the SNAT options. We&amp;rsquo;ll have to do it via the CLI.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# tailscale set --snat-subnet-routes=false
+root@GL-MT3000:~# tailscale debug prefs | grep -A3 -e AdvertiseRoutes -e NoSNAT
+&amp;#34;AdvertiseRoutes&amp;#34;: [
+&amp;#34;192.168.1.0/24&amp;#34;,
+&amp;#34;192.168.8.0/24&amp;#34;
+],
+--
+&amp;#34;NoSNAT&amp;#34;: true,
+&amp;#34;NoStatefulFiltering&amp;#34;: true,
+&amp;#34;NetfilterMode&amp;#34;: 2,
+&amp;#34;AutoUpdate&amp;#34;: {&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Okay! Perfect. Let&amp;rsquo;s test it.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;
+$ curl --connect-timeout 1 https://ifconfig.me
+curl: (28) Failed to connect to ifconfig.me port 443 after 1006 ms: Timeout was reached&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Still nothing.&lt;/p&gt;
+&lt;h2&gt;Hypothesis 2: routing or firewall is wrong&lt;span class="hx:absolute hx:-mt-20" id="hypothesis-2-routing-or-firewall-is-wrong"&gt;&lt;/span&gt;
+&lt;a href="#hypothesis-2-routing-or-firewall-is-wrong" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Now let&amp;rsquo;s look at table 52 again with exit node enabled. We&amp;rsquo;re seeing a new default route, and it&amp;rsquo;s skipping local traffic:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;root@GL-MT3000:~p# ip route show table &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;default dev tailscale0 &lt;span class="c1"&gt;# &amp;lt;-- new&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.73.38.121 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.76.113.4 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;throw 127.0.0.0/8
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;throw 192.168.1.0/24
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;throw 192.168.8.0/23&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;That &lt;code&gt;default dev tailscale0&lt;/code&gt; means all internet-bound traffic now matches in table 52, at ip rule priority 5270, before GL.iNet&amp;rsquo;s next routing rule. Both the router&amp;rsquo;s own traffic and forwarded LAN traffic should go into the Tailscale tunnel.&lt;/p&gt;
+&lt;p&gt;I verified with &lt;code&gt;ip route get&lt;/code&gt;, simulating a LAN client packet with the GL.iNet mangle mark:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;root@GL-MT3000:~# ip route get 8.8.8.8 from 192.168.8.209 iif br-lan mark 0x8000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;8.8.8.8 from 192.168.8.209 dev tailscale0 table &lt;span class="m"&gt;52&lt;/span&gt; mark 0x8000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; cache iif br-lan&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Great! The kernel confirms this: a packet from a LAN client heading to 8.8.8.8, even with the mangle mark applied, would be routed to &lt;code&gt;tailscale0&lt;/code&gt; via table 52. The routing layer was correct.&lt;/p&gt;
+&lt;p&gt;I also checked the firewall. Tailscale&amp;rsquo;s own chains in the filter table:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# iptables -t filter -S ts-forward
+-N ts-forward
+-A ts-forward -i tailscale0 -j MARK --set-xmark 0x40000/0xff0000
+-A ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+-A ts-forward -s 100.64.0.0/10 -o tailscale0 -j DROP
+-A ts-forward -o tailscale0 -j ACCEPT&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Traffic forwarded to &lt;code&gt;tailscale0&lt;/code&gt; is explicitly accepted so no firewall block.&lt;/p&gt;
+&lt;p&gt;This also seems to not be an issue. The kernel routes LAN packets to tailscale0. The firewall allows them through.&lt;/p&gt;
+&lt;p&gt;I confirmed this with iptables counters by zeroing the counters, 464 packets were forwarded from br-lan to tailscale0 in short period. Zero packets went to apclix0 (the WAN interface).&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# iptables -Z INPUT
+root@GL-MT3000:~# iptables -Z OUTPUT
+root@GL-MT3000:~# iptables -Z FORWARD
+root@GL-MT3000:~# iptables -I INPUT 1 -i tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_IN&amp;#34;
+root@GL-MT3000:~# iptables -I OUTPUT 1 -o tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_OUT&amp;#34;
+root@GL-MT3000:~# iptables -I FORWARD 1 -i br-lan -o tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_FWD&amp;#34;
+root@GL-MT3000:~# iptables -I FORWARD 2 -i br-lan -o apclix0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_WAN_FWD&amp;#34;
+root@GL-MT3000:~# conntrack -F
+conntrack v1.4.6 (conntrack-tools): connection tracking table has been emptied.
+root@GL-MT3000:~# iptables -L INPUT -n -v | grep tailscale0 -C3
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+pkts bytes target prot opt in out source destination
+1 76 ACCEPT all -- tailscale0 * 0.0.0.0/0 0.0.0.0/0 /* DEBUG_TS_IN */
+203 18127 ts-input all -- * * 0.0.0.0/0 0.0.0.0/0
+0 0 ACCEPT icmp -- br-lan * 0.0.0.0/0 0.0.0.0/0 icmptype 8 limit: avg 25/sec burst 5
+0 0 LOG icmp -- br-lan * 0.0.0.0/0 0.0.0.0/0 icmptype 8 limit: avg 1/sec burst 5 LOG flags 0 level 4
+--
+0 0 zone_wan_input all -- eth0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+72 2016 zone_wan_input all -- apclix0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_guest_input all -- br-guest * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_tailscale0_input all -- tailscale0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+root@GL-MT3000:~# iptables -L OUTPUT -n -v | grep tailscale0 -C3
+Chain OUTPUT (policy ACCEPT 0 packets, 0 bytes)
+pkts bytes target prot opt in out source destination
+7 457 ACCEPT all -- * tailscale0 0.0.0.0/0 0.0.0.0/0 /* DEBUG_TS_OUT */
+1 180 ACCEPT all -- * lo 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+595 78591 output_rule all -- * * 0.0.0.0/0 0.0.0.0/0 /* !fw3: Custom output rule chain */
+525 70342 ACCEPT all -- * * 0.0.0.0/0 0.0.0.0/0 ctstate RELATED,ESTABLISHED /* !fw3 */
+--
+0 0 zone_wan_output all -- * eth0 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+69 8197 zone_wan_output all -- * apclix0 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_guest_output all -- * br-guest 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_tailscale0_output all -- * tailscale0 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+root@GL-MT3000:~# iptables -L FORWARD -n -v | grep tailscale0 -C3
+Chain FORWARD (policy DROP 0 packets, 0 bytes)
+pkts bytes target prot opt in out source destination
+371 23838 ACCEPT all -- br-lan tailscale0 0.0.0.0/0 0.0.0.0/0 /* DEBUG_TS_FWD */
+0 0 ACCEPT all -- br-lan apclix0 0.0.0.0/0 0.0.0.0/0 /* DEBUG_WAN_FWD */
+117 9348 ts-forward all -- * * 0.0.0.0/0 0.0.0.0/0
+0 0 DROP all -- * * 0.0.0.0/0 0.0.0.0/0 match-set GL_MAC_BLOCK src
+--
+0 0 zone_wan_forward all -- eth0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_wan_forward all -- apclix0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_guest_forward all -- br-guest * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_tailscale0_forward all -- tailscale0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 reject all -- * * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+root@GL-MT3000:~# cat /proc/net/nf_conntrack | grep &amp;#34;192.168.8&amp;#34; | grep -v &amp;#34;dst=192.168.8&amp;#34;
+root@GL-MT3000:~# iptables -D FORWARD -i br-lan -o tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_FWD&amp;#34;
+root@GL-MT3000:~# iptables -D FORWARD -i br-lan -o apclix0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_WAN_FWD&amp;#34;
+root@GL-MT3000:~# iptables -D INPUT -i tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_IN&amp;#34;
+root@GL-MT3000:~# iptables -D OUTPUT -o tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_OUT&amp;#34;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;So 464 packets went in. Nothing came back.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;p&gt;Let&amp;rsquo;s validate using tcpdump.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;$ ping -c4 1.1.1.1
+PING 1.1.1.1 (1.1.1.1): 56 data bytes
+Request timeout for icmp_seq 0
+Request timeout for icmp_seq 1
+Request timeout for icmp_seq 2
+--- 1.1.1.1 ping statistics ---
+4 packets transmitted, 0 packets received, 100.0% packet loss&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# tcpdump -i tailscale0 -n &amp;#39;host 192.168.8.209 and host 1.1.1.1&amp;#39;
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on tailscale0, link-type RAW (Raw IP), capture size 262144 bytes
+20:45:13.787471 IP 192.168.8.209 &amp;gt; 1.1.1.1: ICMP echo request, id 36938, seq 0, length 64
+20:45:14.796386 IP 192.168.8.209 &amp;gt; 1.1.1.1: ICMP echo request, id 36938, seq 1, length 64
+20:45:15.844514 IP 192.168.8.209 &amp;gt; 1.1.1.1: ICMP echo request, id 36938, seq 2, length 64
+20:45:16.798100 IP 192.168.8.209 &amp;gt; 1.1.1.1: ICMP echo request, id 36938, seq 3, length 64&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;No echo replies. But this is interesting. The source IP is my LAN IP. This is certainly not expected. If this was NATed, I&amp;rsquo;d expected it the source IP to be the Tailscale IP.&lt;/p&gt;
+&lt;h2&gt;The packets go in but nothing comes back&lt;span class="hx:absolute hx:-mt-20" id="the-packets-go-in-but-nothing-comes-back"&gt;&lt;/span&gt;
+&lt;a href="#the-packets-go-in-but-nothing-comes-back" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Okay, let&amp;rsquo;s check why SNAT is not working.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# uci show firewall | grep &amp;#34;=zone&amp;#34; | grep tailscale
+firewall.tailscale0=zone
+root@GL-MT3000:~# uci show firewall.tailscale0=zone
+firewall.tailscale0=zone
+firewall.tailscale0.name=&amp;#39;tailscale0&amp;#39;
+firewall.tailscale0.input=&amp;#39;ACCEPT&amp;#39;
+firewall.tailscale0.mtu_fix=&amp;#39;1&amp;#39;
+firewall.tailscale0.device=&amp;#39;tailscale0&amp;#39;
+firewall.tailscale0.output=&amp;#39;ACCEPT&amp;#39;
+firewall.tailscale0.forward=&amp;#39;REJECT&amp;#39;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Oh, this certainly would explain it. I would expect it to be &lt;code&gt;masq='1'&lt;/code&gt;.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# iptables -t nat -S | grep -i masq
+-A zone_wan_postrouting -m comment --comment &amp;#34;!fw3&amp;#34; -j MASQUERADE&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And there is no &lt;code&gt;POSTROUTING&lt;/code&gt; rule &lt;code&gt;MASQUERADE&lt;/code&gt; for &lt;code&gt;tailscale0&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;Let&amp;rsquo;s force a minimal rule for this.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# iptables -t nat -A POSTROUTING -o tailscale0 -s 192.168.8.0/24 -j MASQUERADE&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And let&amp;rsquo;s test it&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;$ curl https://ifconfig.me
+45.159.89.9&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Hallelujah! It&amp;rsquo;s working. Now we need to make this permanent.&lt;/p&gt;
+&lt;h2&gt;Making the fix permanent&lt;span class="hx:absolute hx:-mt-20" id="making-the-fix-permanent"&gt;&lt;/span&gt;
+&lt;a href="#making-the-fix-permanent" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Did you check the docs for OpenWRT to see why this is?&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Uuuh&amp;hellip;&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;p&gt;So at this point, I started looking at the &lt;a href="https://openwrt.org/docs/guide-user/services/vpn/tailscale/start?s[]=ad&amp;amp;s[]=commit"
+target="_blank" rel="noopener"
+&gt;OpenWRT docs for Tailscale&lt;/a&gt;, and started the setup from scratch.&lt;/p&gt;
+&lt;p&gt;New Firewall rule&amp;hellip;&lt;/p&gt;
+&lt;p&gt;There is it!&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;Masquerading: &lt;strong&gt;on&lt;/strong&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;When using the GL.iNet UI to enable traffic through an exit node, it seems it does not set the masquerading option for the new tailscale network. This needs to be done manually in LuCI (available at System &amp;gt; Advanced Settings). The rule is already added, but masquerading is not enabled. Enabling that fixes the traffic in the same way.&lt;/p&gt;
+&lt;h2&gt;Lesson learned&lt;span class="hx:absolute hx:-mt-20" id="lesson-learned"&gt;&lt;/span&gt;
+&lt;a href="#lesson-learned" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;This seems like something I should have caught early on by simply checking the docs. Well, sometimes you just don&amp;rsquo;t need a manual.&lt;/p&gt;</description></item><item><title>Hetzner's odd default Firewall rule</title><link>https://hoshsadiq.github.io/blog/k3s-hetzner-egress-debugging/</link><pubDate>Tue, 26 Aug 2025 00:00:00 +0000</pubDate><guid>https://hoshsadiq.github.io/blog/k3s-hetzner-egress-debugging/</guid><description>
+&lt;p&gt;Pods in my k3s cluster on a Hetzner dedicated server were failing to reach external services. Spoiler: Hetzner&amp;rsquo;s default Firewall rules (probably?) don&amp;rsquo;t make sense.&lt;/p&gt;
+&lt;p&gt;It took a few hours of investigation to finally understand this issue.&lt;/p&gt;
+&lt;h2&gt;The setup&lt;span class="hx:absolute hx:-mt-20" id="the-setup"&gt;&lt;/span&gt;
+&lt;a href="#the-setup" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I am running a single-node k3s cluster on a Hetzner dedicated server.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;k3s single-node cluster (Hetzner dedicated, Rocky Linux 9.7)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; IP: 203.0.113.50
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; Interface: enp0s31f6
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; |
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; +-- flannel.1 (VXLAN)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; +-- cni0 (bridge)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; | +-- veth* (pod interfaces)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; +-- tailscale0 (MTU 1280)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Pod CIDR: 10.42.0.0/16
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Service CIDR: 10.43.0.0/16
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Flannel backend: VXLAN
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;iptables: v1.8.10 (nf_tables backend)&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Some details about the setup:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;I&amp;rsquo;m using Rocky Linux 9.7&lt;/li&gt;
+&lt;li&gt;Running k3s v1.34.4&lt;/li&gt;
+&lt;li&gt;Tailscale is running on the host for remote access&lt;/li&gt;
+&lt;li&gt;I have not enabled host-level firewalls such as firewalld&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;I was trying to set up ArgoCD on this k3s installation, but for some reason, the repo-server timed out while adding a git repository with &lt;code&gt;context deadline exceeded (Client.Timeout exceeded while awaiting headers)&lt;/code&gt;. Very strange as, anecdotally, I am able to connect to GitHub normally within the cluster from some pods.&lt;/p&gt;
+&lt;h2&gt;Isolating the problem&lt;span class="hx:absolute hx:-mt-20" id="isolating-the-problem"&gt;&lt;/span&gt;
+&lt;a href="#isolating-the-problem" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;First step: determine if this is an ArgoCD problem or a network problem. I created a debug pod using the netshoot image to run some tests. This pod will be used regularly down the line so let&amp;rsquo;s just keep it running and exec into it.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;pod-network test&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl run debug-net --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never -- sleep infinity
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod/debug-net created&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;I already confirmed I could clone once, so to see if this was a transient issue, I ran a simple loop to test connectivity to GitHub from within the pod network.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;10&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl &lt;span class="nb"&gt;exec&lt;/span&gt; -i debug-net -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -I&lt;span class="o"&gt;{}&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; curl -sS -o /dev/null -w &lt;span class="s2"&gt;&amp;#34;attempt {}: %{http_code} %{time_connect}\n&amp;#34;&lt;/span&gt; --connect-timeout &lt;span class="m"&gt;5&lt;/span&gt; https://github.com
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;200&lt;/span&gt; 0.006835
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 4: &lt;span class="m"&gt;200&lt;/span&gt; 0.006701
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 5: &lt;span class="m"&gt;200&lt;/span&gt; 0.006855
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 6: &lt;span class="m"&gt;200&lt;/span&gt; 0.006965
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 7: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 8: &lt;span class="m"&gt;200&lt;/span&gt; 0.006903
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 9: &lt;span class="m"&gt;200&lt;/span&gt; 0.006652
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;200&lt;/span&gt; 0.006639&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Notice we have 3 items where the http code is &lt;code&gt;000&lt;/code&gt;, and the connect time is 0. That means 3 out of 10 failures. Now let&amp;rsquo;s try the same test from a host-network pod:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;host-network test&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;10&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl run debug-host -i --rm --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true}}&amp;#39;&lt;/span&gt; -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -I&lt;span class="o"&gt;{}&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; curl -sS -o /dev/null -w &lt;span class="s2"&gt;&amp;#34;attempt {}: %{http_code} %{time_connect}\n&amp;#34;&lt;/span&gt; --connect-timeout &lt;span class="m"&gt;5&lt;/span&gt; https://github.com
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;200&lt;/span&gt; 0.005891
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;200&lt;/span&gt; 0.006012
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;200&lt;/span&gt; 0.005934
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;200&lt;/span&gt; 0.005998
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-host&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;10 out of 10 success. So this is not GitHub being flaky. Something about the pod network path is different.&lt;/p&gt;
+&lt;h2&gt;Ruling out the usual suspects&lt;span class="hx:absolute hx:-mt-20" id="ruling-out-the-usual-suspects"&gt;&lt;/span&gt;
+&lt;a href="#ruling-out-the-usual-suspects" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;h3&gt;Hypothesis: MTU fragmentation&lt;span class="hx:absolute hx:-mt-20" id="hypothesis-mtu-fragmentation"&gt;&lt;/span&gt;
+&lt;a href="#hypothesis-mtu-fragmentation" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;This was an unnecessary wild goose chase I got into due to AI. It made no sense, but I figured I&amp;rsquo;d try and eliminate this. The hypothesis was that VXLAN adds overhead to every packet, so our 1500-byte MTU wasn&amp;rsquo;t leaving enough room (i.e. packets were getting too big). The breakdown is: outer IP (20) + UDP (8) + VXLAN header (8) + inner Ethernet (14) = 50 bytes. Since the host MTU is 1500, the inner MTU must be 1450.&lt;/p&gt;
+&lt;p&gt;The Maximum Segment Size (MSS) advertised in SYN packets should be inner MTU - 20 (IP header) - 20 (TCP header) = 1410.&lt;/p&gt;
+&lt;p&gt;I checked the pod MTU:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl &lt;span class="nb"&gt;exec&lt;/span&gt; debug-net -- cat /sys/class/net/eth0/mtu
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="m"&gt;1450&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Okay, so that&amp;rsquo;s correct. If MTU was the issue, I&amp;rsquo;d expect successful connections that break during data transfer, not connections that fail to establish at all. Meaning MTU is unlikely to be the cause. I confirmed later in tcpdump that both successful and failed SYNs showed &lt;code&gt;mss 1410&lt;/code&gt;, which matches the expected 1450 inner MTU.&lt;/p&gt;
+&lt;h3&gt;Hypothesis: conntrack exhaustion&lt;span class="hx:absolute hx:-mt-20" id="hypothesis-conntrack-exhaustion"&gt;&lt;/span&gt;
+&lt;a href="#hypothesis-conntrack-exhaustion" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Conntrack is the kernel&amp;rsquo;s connection tracking table. Every connection gets an entry. If the table fills up, new connections are dropped.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ssh hetzner-server cat /proc/sys/net/netfilter/nf_conntrack_count
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="m"&gt;823&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ssh hetzner-server cat /proc/sys/net/netfilter/nf_conntrack_max
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="m"&gt;262144&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ssh hetzner-server conntrack -S
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;cpu&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;0&lt;/span&gt; &lt;span class="nv"&gt;found&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;0&lt;/span&gt; &lt;span class="nv"&gt;invalid&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;22283&lt;/span&gt; &lt;span class="nv"&gt;insert&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;0&lt;/span&gt; &lt;span class="nv"&gt;insert_failed&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;212&lt;/span&gt; &lt;span class="nv"&gt;drop&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;212&lt;/span&gt; &lt;span class="nv"&gt;early_drop&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;0&lt;/span&gt; ...&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Only 823 out of 262,144 entries used. The stats showed 212 &lt;code&gt;insert_failed&lt;/code&gt; and 212 &lt;code&gt;drop&lt;/code&gt; over 12 million forwarded packets. Conntrack is unlikely to be the issue here.&lt;/p&gt;
+&lt;h2&gt;tcpdump on the physical interface&lt;span class="hx:absolute hx:-mt-20" id="tcpdump-on-the-physical-interface"&gt;&lt;/span&gt;
+&lt;a href="#tcpdump-on-the-physical-interface" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;This is where the investigation got interesting. I ran tcpdump on the host on &lt;code&gt;enp0s31f6&lt;/code&gt;, the physical NIC. Capturing here is key because it shows packets after they have passed through the entire kernel networking stack, that is iptables, NAT, and routing. I.e. if a packet appears here, it left the host.&lt;/p&gt;
+&lt;p&gt;I generated some pod traffic to github.com (&lt;code&gt;140.82.121.3&lt;/code&gt;) from the same &lt;code&gt;debug-net&lt;/code&gt; pod and watched the physical interface on the host.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;tcpdump -i enp0s31f6 -nn host 140.82.121.3&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:18:59.827 203.0.113.50.23475 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:00.868 203.0.113.50.23475 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:02.916 203.0.113.50.23475 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:06.948 203.0.113.50.23475 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:07.870 203.0.113.50.13577 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:08.932 203.0.113.50.13577 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:10.980 203.0.113.50.13577 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:15.012 203.0.113.50.13577 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:15.840 203.0.113.50.59127 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:15.845 140.82.121.3.443 &amp;gt; 203.0.113.50.59127: Flags [S.], mss 1436, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:15.845 203.0.113.50.59127 &amp;gt; 140.82.121.3.443: Flags [.], ack 1, ...&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Okay, this is interesting, the only difference is the source port. Three connections were attempted. Two failed, one succeeded.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;Source port 23475&lt;/strong&gt;: Four SYN retransmits. No SYN-ACK ever arrives.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Source port 13577&lt;/strong&gt;: Same pattern. Four retransmits. No SYN-ACK.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Source port 59127&lt;/strong&gt;: SYN goes out, SYN-ACK comes back in 5ms. Handshake completes.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;I checked the conntrack table on the host to see how these connections were being tracked:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;ssh hetzner-server conntrack -L -d 140.82.121.3&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;ipv4 2 tcp 6 52 SYN_SENT src=10.42.0.125 dst=140.82.121.3 sport=58162 dport=443
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; [UNREPLIED] src=140.82.121.3 dst=203.0.113.50 sport=443 dport=13577
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;ipv4 2 tcp 6 44 SYN_SENT src=10.42.0.125 dst=140.82.121.3 sport=46978 dport=443
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; [UNREPLIED] src=140.82.121.3 dst=203.0.113.50 sport=443 dport=23475&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The pod&amp;rsquo;s original source port (e.g. 58162) was being SNAT&amp;rsquo;d to a new port (e.g. 13577) by flannel&amp;rsquo;s MASQUERADE rule. The &lt;code&gt;[UNREPLIED]&lt;/code&gt; flag means the SYN went out, but nothing came back.&lt;/p&gt;
+&lt;p&gt;My first thought was that maybe GitHub has some DDoS protection which was dropping some SYNs. It would be very weird, but I&amp;rsquo;ve seen weirder stuff in my life. Anyway, this happened with various other destinations I tested, so it couldn&amp;rsquo;t have been GitHub.&lt;/p&gt;
+&lt;h2&gt;More dead ends&lt;span class="hx:absolute hx:-mt-20" id="more-dead-ends"&gt;&lt;/span&gt;
+&lt;a href="#more-dead-ends" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;h3&gt;Theory: bridge-nf-call-iptables&lt;span class="hx:absolute hx:-mt-20" id="theory-bridge-nf-call-iptables"&gt;&lt;/span&gt;
+&lt;a href="#theory-bridge-nf-call-iptables" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;&lt;code&gt;bridge-nf-call-iptables&lt;/code&gt; is a sysctl that makes bridged frames (Layer 2 traffic on &lt;code&gt;cni0&lt;/code&gt;) pass through iptables rules. Kubernetes requires this so that iptables DNAT rules can redirect pod DNS queries to the CoreDNS ClusterIP.&lt;/p&gt;
+&lt;p&gt;I suspected that with this enabled, packets from pods might be traversing the iptables &lt;code&gt;FORWARD&lt;/code&gt; chain twice, once as a bridged frame and once as a routed packet. Maybe something in the second pass was dropping them. Let&amp;rsquo;s find out by using &lt;code&gt;nsenter&lt;/code&gt;:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl run --rm -it debug-brtest --image&lt;span class="o"&gt;=&lt;/span&gt;alpine --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true,&amp;#34;hostPID&amp;#34;:true,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;containers&amp;#34;:[{&amp;#34;name&amp;#34;:&amp;#34;debug-brtest&amp;#34;,&amp;#34;image&amp;#34;:&amp;#34;alpine&amp;#34;,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;securityContext&amp;#34;:{&amp;#34;privileged&amp;#34;:true},
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;command&amp;#34;:[&amp;#34;sh&amp;#34;,&amp;#34;-c&amp;#34;,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;nsenter -t 1 -m -u -n -i -- sysctl -w net.bridge.bridge-nf-call-iptables=0&amp;#34;]}]}}&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;net.bridge.bridge-nf-call-iptables &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="m"&gt;0&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-brtest&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Then I retested from the debug-net pod:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl &lt;span class="nb"&gt;exec&lt;/span&gt; debug-net -- nslookup github.com
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;;;&lt;/span&gt; communications error to 10.43.0.10#53: timed out
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;;;&lt;/span&gt; communications error to 10.43.0.10#53: timed out
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;;;&lt;/span&gt; communications error to 10.43.0.10#53: timed out
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;;;&lt;/span&gt; no servers could be reached&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;This change broke DNS is completely.&lt;/p&gt;
+&lt;p&gt;CoreDNS runs as a pod behind a ClusterIP service (10.43.0.10). Pods send DNS queries to that IP. iptables DNAT rewrites the destination to the actual CoreDNS pod IP. But DNS queries from pods travel over the &lt;code&gt;cni0&lt;/code&gt; bridge. Without &lt;code&gt;bridge-nf-call-iptables&lt;/code&gt;, those bridged frames skip iptables entirely, and the DNAT never happens.&lt;/p&gt;
+&lt;p&gt;Reverted immediately:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl run --rm -it debug-brrevert --image&lt;span class="o"&gt;=&lt;/span&gt;alpine --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true,&amp;#34;hostPID&amp;#34;:true,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;containers&amp;#34;:[{&amp;#34;name&amp;#34;:&amp;#34;debug-brrevert&amp;#34;,&amp;#34;image&amp;#34;:&amp;#34;alpine&amp;#34;,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;securityContext&amp;#34;:{&amp;#34;privileged&amp;#34;:true},
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;command&amp;#34;:[&amp;#34;sh&amp;#34;,&amp;#34;-c&amp;#34;,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;nsenter -t 1 -m -u -n -i -- sysctl -w net.bridge.bridge-nf-call-iptables=1&amp;#34;]}]}}&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;net.bridge.bridge-nf-call-iptables &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="m"&gt;1&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-brrevert&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;DNS came back. Not the cause of the egress failures, and disabling it makes things worse.&lt;/p&gt;
+&lt;h3&gt;Theory: Tailscale routing&lt;span class="hx:absolute hx:-mt-20" id="theory-tailscale-routing"&gt;&lt;/span&gt;
+&lt;a href="#theory-tailscale-routing" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Tailscale adds policy routing rules with fwmark. I checked what the routing setup looked like on the host:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;on the host&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ip rule list
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;0: from all lookup &lt;span class="nb"&gt;local&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5210: from all fwmark 0x80000/0xff0000 lookup main
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5230: from all fwmark 0x80000/0xff0000 lookup default
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5250: from all fwmark 0x80000/0xff0000 unreachable
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5270: from all lookup &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;32766: from all lookup main
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;32767: from all lookup default&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Rule 5270 sends all traffic through table 52. What is in table 52?&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;on the host&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ip route show table &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.73.38.121 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.76.113.4 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.84.202.35 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.100.100.100 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.126.184.59 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ip route show table main
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;default via 203.0.113.1 dev enp0s31f6 proto static metric &lt;span class="m"&gt;100&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10.42.0.0/24 dev cni0 proto kernel scope link src 10.42.0.1
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;203.0.113.1 dev enp0s31f6 proto static scope link metric &lt;span class="m"&gt;100&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Table 52 only contains routes to Tailscale peers (100.x.x.x addresses). For anything else, such as github.com, the lookup finds no match and falls through to the main table, which has the correct default route via 203.0.113.1 on &lt;code&gt;enp0s31f6&lt;/code&gt;. Tailscale is not interfering.&lt;/p&gt;
+&lt;h2&gt;Final hypothesis&lt;span class="hx:absolute hx:-mt-20" id="final-hypothesis"&gt;&lt;/span&gt;
+&lt;a href="#final-hypothesis" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I kept coming back to the tcpdump. The only variable between success and failure was the source port. Failed connections used ports 23475, 13577, and 4905. Successful ones used ports 59127, 32980, and 33364.&lt;/p&gt;
+&lt;p&gt;Then I noticed the pattern: every successful port was at or above 32767. Every failed port was below it.&lt;/p&gt;
+&lt;p&gt;Normal host-originated connections use the kernel&amp;rsquo;s ephemeral port range, defined by &lt;code&gt;net.ipv4.ip_local_port_range&lt;/code&gt;. This defaults to 32768-60999. This explains why host-network pods always work as they always pick from this range.&lt;/p&gt;
+&lt;p&gt;But flannel&amp;rsquo;s MASQUERADE rule uses &lt;code&gt;--random-fully&lt;/code&gt;, which picks from the entire 1024-65535 range. So this defines roughly half to be below 32768.&lt;/p&gt;
+&lt;p&gt;What if Hetzner&amp;rsquo;s upstream network, perhaps their firewall, drops packets with source ports below the ephemeral range? It&amp;rsquo;d be a strange rule, but it&amp;rsquo;s worth testing.&lt;/p&gt;
+&lt;h2&gt;Proving it&lt;span class="hx:absolute hx:-mt-20" id="proving-it"&gt;&lt;/span&gt;
+&lt;a href="#proving-it" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I tested this hypothesis by forcing a host-network pod to use specific source ports. Luckily curl makes this very easy (I say that, but I had no idea curl could do this! Goes to show that you can still learn in the age of AI)!&lt;/p&gt;
+&lt;h3&gt;Test 1: Host-network with random ports across full range (1024-65535)&lt;span class="hx:absolute hx:-mt-20" id="test-1-host-network-with-random-ports-across-full-range-1024-65535"&gt;&lt;/span&gt;
+&lt;a href="#test-1-host-network-with-random-ports-across-full-range-1024-65535" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;20&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl run --rm -i debug-hostent --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true}}&amp;#39;&lt;/span&gt; -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -P4 -I&lt;span class="o"&gt;{}&lt;/span&gt; sh -c &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; port=$((1024 + (RANDOM * 32768 + RANDOM) % 64512))
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; curl -4 -sS -o /dev/null --connect-timeout 1 --local-port &amp;#34;$port&amp;#34; -w &amp;#34;attempt {}: %{http_code} %{time_connect} port=$port&amp;gt;%{remote_port}\n&amp;#34; \
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; https://github.com 2&amp;gt;/dev/null
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; awk &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; /^attempt/{ suffix = ($3 == &amp;#34;000&amp;#34; ? &amp;#34;# FAIL&amp;#34; : &amp;#34;# OK&amp;#34;); print $0, suffix }
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; !/^attempt/{print}
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;29107&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;13023&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;12952&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 4: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;32583&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 5: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;30166&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 6: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;7871&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 7: &lt;span class="m"&gt;200&lt;/span&gt; 0.006227 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;36653&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 8: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;4996&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 9: &lt;span class="m"&gt;200&lt;/span&gt; 0.006177 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;64349&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;27149&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 11: &lt;span class="m"&gt;200&lt;/span&gt; 0.006101 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;33977&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 12: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;28723&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 13: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;17720&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 14: &lt;span class="m"&gt;200&lt;/span&gt; 0.006135 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;39524&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 15: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;20350&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 16: &lt;span class="m"&gt;200&lt;/span&gt; 0.006291 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;45679&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 17: &lt;span class="m"&gt;200&lt;/span&gt; 0.006395 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;50737&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 18: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;30045&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 19: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;21561&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 20: &lt;span class="m"&gt;200&lt;/span&gt; 0.006196 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;35555&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod default/debug-hostent terminated &lt;span class="o"&gt;(&lt;/span&gt;Error&lt;span class="o"&gt;)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-hostent&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;So 13 out of 20 failed, all successful ports were above 32767.&lt;/p&gt;
+&lt;h3&gt;Test 2: Host-network with ephemeral ports only (32768-65535)&lt;span class="hx:absolute hx:-mt-20" id="test-2-host-network-with-ephemeral-ports-only-32768-65535"&gt;&lt;/span&gt;
+&lt;a href="#test-2-host-network-with-ephemeral-ports-only-32768-65535" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;host-network pod&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;20&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl run --rm -i debug-hostent --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true}}&amp;#39;&lt;/span&gt; -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -P4 -I&lt;span class="o"&gt;{}&lt;/span&gt; sh -c &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; port=$((RANDOM + 32768))
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; curl -4 -sS -o /dev/null --connect-timeout 1 --local-port &amp;#34;$port&amp;#34; -w &amp;#34;attempt {}: %{http_code} %{time_connect} port=$port&amp;gt;%{remote_port}\n&amp;#34; \
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; https://github.com 2&amp;gt;/dev/null
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; awk &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; /^attempt/{ suffix = ($3 == &amp;#34;000&amp;#34; ? &amp;#34;# FAIL&amp;#34; : &amp;#34;# OK&amp;#34;); print $0, suffix }
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; !/^attempt/{print}
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;200&lt;/span&gt; 0.006302 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;64072&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;200&lt;/span&gt; 0.006250 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;34944&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;200&lt;/span&gt; 0.006293 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;35875&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 4: &lt;span class="m"&gt;200&lt;/span&gt; 0.006265 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;51814&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 5: &lt;span class="m"&gt;200&lt;/span&gt; 0.006103 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;55567&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 8: &lt;span class="m"&gt;200&lt;/span&gt; 0.006113 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;37204&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 7: &lt;span class="m"&gt;200&lt;/span&gt; 0.006007 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;45957&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 6: &lt;span class="m"&gt;200&lt;/span&gt; 0.006120 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;54278&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;200&lt;/span&gt; 0.006099 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;61168&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 9: &lt;span class="m"&gt;200&lt;/span&gt; 0.006177 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;55307&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 12: &lt;span class="m"&gt;200&lt;/span&gt; 0.006225 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;33839&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 11: &lt;span class="m"&gt;200&lt;/span&gt; 0.006135 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;50660&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 13: &lt;span class="m"&gt;200&lt;/span&gt; 0.006047 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;39438&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 15: &lt;span class="m"&gt;200&lt;/span&gt; 0.006071 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;51600&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 16: &lt;span class="m"&gt;200&lt;/span&gt; 0.006132 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;47960&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 14: &lt;span class="m"&gt;200&lt;/span&gt; 0.006105 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;58884&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 17: &lt;span class="m"&gt;200&lt;/span&gt; 0.006617 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;42085&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 18: &lt;span class="m"&gt;200&lt;/span&gt; 0.006116 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;62988&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 19: &lt;span class="m"&gt;200&lt;/span&gt; 0.006086 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;51691&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 20: &lt;span class="m"&gt;200&lt;/span&gt; 0.006161 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;37760&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-hostent&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;All requests succeeded. It seems something somewhere in Hetzner&amp;rsquo;s network was possibly dropping incoming SYN-ACK packets with source ports below less than 32767.&lt;/p&gt;
+&lt;h2&gt;Root cause&lt;span class="hx:absolute hx:-mt-20" id="root-cause"&gt;&lt;/span&gt;
+&lt;a href="#root-cause" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;So it seems the root cause was a combination of Hetzner&amp;rsquo;s upstream filtering and flannel&amp;rsquo;s default MASQUERADE behavior.&lt;/p&gt;
+&lt;p&gt;Flannel uses &lt;code&gt;--random-fully&lt;/code&gt; in its MASQUERADE rules.&lt;/p&gt;
+&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Is &lt;code&gt;--random-fully&lt;/code&gt; the right default? Why does flannel use it?&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;It reduces the chance of conntrack 5-tuple collisions when many pods make connections simultaneously. The kernel&amp;rsquo;s &lt;code&gt;--random&lt;/code&gt; option picks from the ephemeral range, but &lt;code&gt;--random-fully&lt;/code&gt; uses the full range to reduce collision. It is a reasonable default for most networks, but it is clearly incompatible with some firewall rule in Hetzner&amp;rsquo;s network.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;p&gt;I checked the source code to see if k3s or flannel could be configured to avoid this.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;Flannel has a &lt;code&gt;--ip-masq-fully-random-disable&lt;/code&gt; CLI flag that switches from &lt;code&gt;--random-fully&lt;/code&gt; to &lt;code&gt;--random&lt;/code&gt;.&lt;/li&gt;
+&lt;li&gt;The flannel traffic manager interface accepts this as the &lt;a href="https://github.com/flannel-io/flannel/blob/f17c3c7fb58ba68e725736badeeaf4af63ec38c0/pkg/trafficmngr/trafficmngr.go#L54"
+target="_blank" rel="noopener"
+&gt;&lt;code&gt;ipMasqRandomFullyDisable&lt;/code&gt; parameter&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;K3s embeds flannel and &lt;a href="https://github.com/k3s-io/k3s/blob/39ccf3e075b465b6969f5eb7cdce52acebb1aa53/pkg/agent/flannel/flannel.go#L111-L114"
+target="_blank" rel="noopener"
+&gt;always passes &lt;code&gt;false&lt;/code&gt;&lt;/a&gt; for this parameter.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;So, there is no k3s server flag or config option to change it.&lt;/p&gt;
+&lt;h2&gt;The workaround&lt;span class="hx:absolute hx:-mt-20" id="the-workaround"&gt;&lt;/span&gt;
+&lt;a href="#the-workaround" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;At this point I wanted to figure why Hetzner&amp;rsquo;s network was dropping these packets so my next thought was to raise a ticket with them. But I figured before I do that, I needed a workaround. I decided to constrain MASQUERADE for pod egress to use only ephemeral ports. This meant inserting two iptables rules in the &lt;code&gt;POSTROUTING&lt;/code&gt; chain before flannel&amp;rsquo;s own jump rule.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;on the host&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ iptables -t nat -I POSTROUTING &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -s 10.42.0.0/16 ! -d 224.0.0.0/4 -p tcp &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -m comment --comment &lt;span class="s2"&gt;&amp;#34;hetzner-ephemeral-masq&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -j MASQUERADE --to-ports 32768-60999
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ iptables -t nat -I POSTROUTING &lt;span class="m"&gt;2&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -s 10.42.0.0/16 ! -d 224.0.0.0/4 -p udp &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -m comment --comment &lt;span class="s2"&gt;&amp;#34;hetzner-ephemeral-masq&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -j MASQUERADE --to-ports 32768-60999&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;After applying these, I get all successes again.&lt;/p&gt;
+&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Why not insert these rules into flannel&amp;rsquo;s own chain?&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Because flannel will delete them. K3s has embedded Flannel, and calls various Flannel functions to resync every minute or so. Any custom rules inserted there get wiped. Rules in the top-level &lt;code&gt;POSTROUTING&lt;/code&gt; chain, placed before the jump to &lt;code&gt;FLANNEL-POSTRTG&lt;/code&gt;, survive the resync.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;h2&gt;Making it permanent&lt;span class="hx:absolute hx:-mt-20" id="making-it-permanent"&gt;&lt;/span&gt;
+&lt;a href="#making-it-permanent" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The workaround obviously needs to survive reboots, and since k3s won&amp;rsquo;t let me configure it correctly, I created a systemd service to apply these changes at boot.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;/etc/systemd/system/k3s-hetzner-masq-fix.service&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-ini" data-lang="ini"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Unit]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Description&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;Restrict flannel MASQUERADE to ephemeral ports (Hetzner workaround)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;After&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;k3s.service&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Requires&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;k3s.service&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Service]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Type&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;oneshot&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;RemainAfterExit&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;yes&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;ExecStartPre&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;/bin/bash -c &amp;#39;until iptables -t nat -L FLANNEL-POSTRTG &amp;amp;&amp;gt;/dev/null; do sleep 2; done&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;ExecStart&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;/usr/local/bin/k3s-hetzner-masq-fix.sh&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Restart&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;on-failure&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;RestartSec&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;30&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Install]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;WantedBy&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;multi-user.target&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;/usr/local/bin/k3s-hetzner-masq-fix.sh&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="cp"&gt;#!/usr/bin/env bash
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;set&lt;/span&gt; -euo pipefail
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;CIDR&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;10.42.0.0/16&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;COMMENT&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;hetzner-ephemeral-masq&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;for&lt;/span&gt; proto in tcp udp&lt;span class="p"&gt;;&lt;/span&gt; &lt;span class="k"&gt;do&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; iptables -t nat -D POSTROUTING &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -s &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$CIDR&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; ! -d 224.0.0.0/4 &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -p &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$proto&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -m comment --comment &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$COMMENT&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -j MASQUERADE --to-ports 32768-60999 2&amp;gt;/dev/null &lt;span class="o"&gt;||&lt;/span&gt; &lt;span class="nb"&gt;true&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; iptables -t nat -I POSTROUTING &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -s &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$CIDR&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; ! -d 224.0.0.0/4 &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -p &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$proto&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -m comment --comment &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$COMMENT&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -j MASQUERADE --to-ports 32768-60999
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;done&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;h2&gt;The actual fix&lt;span class="hx:absolute hx:-mt-20" id="the-actual-fix"&gt;&lt;/span&gt;
+&lt;a href="#the-actual-fix" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;After deploying the workaround, I was in the middle of raising a ticket with Hetzner to understand this, but as I searched a bit further, I came across issue &lt;a href="https://github.com/k3s-io/k3s/issues/5220"
+target="_blank" rel="noopener"
+&gt;k3s-io/k3s#5220&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;It turned out that the dedicated Hetzner server has a provider-level firewall outside the machine itself. I had noticed it when I bought the server at auction, but had forgotten it existed. One of its default rules accepts TCP packets with the ACK flag set only when their destination port is in the range &lt;code&gt;32767–65535&lt;/code&gt;. TCP packets with &lt;code&gt;ACK&lt;/code&gt; set and destination ports below that range are dropped.&lt;/p&gt;
+&lt;p&gt;Checking for &lt;code&gt;ACK&lt;/code&gt; is just a rough way to distinguish reply traffic from new inbound TCP connections, and often can make sense as a firewall setting. However, it is not equivalent to connection tracking since any packet can have &lt;code&gt;ACK&lt;/code&gt; set.&lt;/p&gt;
+&lt;p&gt;The problem is that the rule assumes packets are sent and on the kernel’s usual ephemeral-port range, 32767–65535, and thus, packets will come back on the same range. This is of course a default, and individual applications can override this, as Flannel&amp;rsquo;s &lt;code&gt;MASQUERADE --random-fully&lt;/code&gt; does. It can choose any source port including one below 32767, same way we were able to do so with &lt;code&gt;curl&lt;/code&gt;. This means the reply comes back to a port Hetzner’s firewall drops.&lt;/p&gt;
+&lt;p&gt;So I updated it to be 1024-65535. I disabled the iptables workaround and tested low local ports again:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;20&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl run --rm -i debug-hostent --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true}}&amp;#39;&lt;/span&gt; -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -P4 -I&lt;span class="o"&gt;{}&lt;/span&gt; sh -c &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; port=$((1024 + RANDOM % 31745))
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; curl -4 -sS -o /dev/null --connect-timeout 1 --local-port &amp;#34;$port&amp;#34; -w &amp;#34;attempt {}: %{http_code} %{time_connect} port=$port&amp;gt;%{remote_port}\n&amp;#34; \
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; https://github.com 2&amp;gt;/dev/null
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; awk &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; /^attempt/{ suffix = ($3 == &amp;#34;000&amp;#34; ? &amp;#34;# FAIL&amp;#34; : &amp;#34;# OK&amp;#34;); print $0, suffix }
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; !/^attempt/{print}
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;200&lt;/span&gt; 0.006344 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;14771&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;200&lt;/span&gt; 0.006288 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;6139&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 4: &lt;span class="m"&gt;200&lt;/span&gt; 0.006352 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;24501&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;200&lt;/span&gt; 0.006274 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;12774&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 7: &lt;span class="m"&gt;200&lt;/span&gt; 0.006076 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;3857&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 5: &lt;span class="m"&gt;200&lt;/span&gt; 0.006291 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;29052&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 6: &lt;span class="m"&gt;200&lt;/span&gt; 0.006066 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;1610&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 8: &lt;span class="m"&gt;200&lt;/span&gt; 0.007296 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;9568&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 9: &lt;span class="m"&gt;200&lt;/span&gt; 0.006178 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;15316&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;200&lt;/span&gt; 0.006077 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;20026&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 11: &lt;span class="m"&gt;200&lt;/span&gt; 0.005950 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;27545&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 12: &lt;span class="m"&gt;200&lt;/span&gt; 0.006437 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;31795&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 15: &lt;span class="m"&gt;200&lt;/span&gt; 0.005950 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;16112&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 14: &lt;span class="m"&gt;200&lt;/span&gt; 0.005901 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;31181&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 13: &lt;span class="m"&gt;200&lt;/span&gt; 0.006270 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;15968&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 16: &lt;span class="m"&gt;200&lt;/span&gt; 0.006159 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;18248&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 17: &lt;span class="m"&gt;200&lt;/span&gt; 0.006543 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;11026&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 19: &lt;span class="m"&gt;200&lt;/span&gt; 0.005981 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;29464&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 18: &lt;span class="m"&gt;200&lt;/span&gt; 0.006164 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;32431&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 20: &lt;span class="m"&gt;200&lt;/span&gt; 0.006216 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;1130&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-hostent&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;All 20 succeeded. The ports that were being blackholed now work fine.&lt;/p&gt;
+&lt;p&gt;It&amp;rsquo;s a strange rule to add as a default, but at least there&amp;rsquo;s a fix.&lt;/p&gt;
+&lt;p&gt;I do wonder if I had given Claude full responsibility to figure this out, if it would have found the issue sooner.&lt;/p&gt;</description></item></channel></rss>

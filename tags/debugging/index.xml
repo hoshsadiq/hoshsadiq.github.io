@@ -1,0 +1,989 @@
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Hosh's Blog – Debugging</title><link>https://hoshsadiq.github.io/tags/debugging/</link><description>Recent content in Debugging on Hosh's Blog</description><generator>Hugo -- gohugo.io</generator><language>en-gb</language><lastBuildDate>Sun, 22 Feb 2026 00:00:00 +0000</lastBuildDate><atom:link href="https://hoshsadiq.github.io/tags/debugging/index.xml" rel="self" type="application/rss+xml"/><item><title>Talos Linux won't boot: all-zero UUID on Hetzner dedicated servers</title><link>https://hoshsadiq.github.io/blog/talos-uuid-hetzner/</link><pubDate>Sun, 22 Feb 2026 00:00:00 +0000</pubDate><guid>https://hoshsadiq.github.io/blog/talos-uuid-hetzner/</guid><description>
+&lt;p&gt;I just needed to upgrade my Kubernetes cluster. My Hetzner dedicated server had other ideas.&lt;/p&gt;
+&lt;h2&gt;The setup&lt;span class="hx:absolute hx:-mt-20" id="the-setup"&gt;&lt;/span&gt;
+&lt;a href="#the-setup" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I run my homelab on a Kubernetes cluster using Talos Linux. The hardware is a Hetzner dedicated server I bought at auction, a Fujitsu ESPRIMO with a hardware RAID controller.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Hetzner dedicated server (Fujitsu ESPRIMO-FTS, D3401-H2)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; Talos Linux v1.10.4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; Disk: /dev/sda (LogicalDrv 0, hardware RAID)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda1: STATE (LUKS encrypted)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda2: BIOS boot
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda3: BOOT (XFS)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda4: META (1MB, Talos metadata)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda5: EPHEMERAL (LUKS encrypted)&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Over the past few months, I have been experimenting with various ways to run my homelab. I have a few services currently running at home on a small fleet of Raspberry Pis, and I have been planning to migrate them to something more robust. I tried configuring everything using various different orchestration methods, but none felt really intuitive to me.&lt;/p&gt;
+&lt;p&gt;I tried Portainer, but that seems to be going towards the closed source route (I know it is not yet, but the trajectory is already set). Then I tried Komo.do. I really wanted it to work, but the workflow was just not great. The system writes back to the git, and I really struggled to get automated syncs to work, and certainly there were a few places where the sync just refused to happen because of a chicken and egg situation that I cannot remember now (IIRC it was a file had to be written but the sync depended on it or something).&lt;/p&gt;
+&lt;p&gt;As someone who does a lot of platform engineering, I work with Kubernetes every day, which is a fairly complex system especially when start thinking about the ecosystem. There are various homelab targetted systems that try to address the complexity of Kubernetes. I think many have addressed a lot of the complexity of &lt;em&gt;administrating&lt;/em&gt; Kubernetes, however, I think the workflows they target do not take into account &lt;em&gt;users&lt;/em&gt; of the software.&lt;/p&gt;
+&lt;p&gt;So I gave in, I went back to what I am comfortable with. &lt;em&gt;Kubernetes here I come!&lt;/em&gt;&lt;/p&gt;
+&lt;p&gt;As you saw from a &lt;a href="https://hoshsadiq.github.io/blog/k3s-hetzner-egress-debugging/"
+&gt;blog a few months ago&lt;/a&gt;, I was setting up K3s, but at some point, I got reminded of Talos, and I had always wanted to mess around with it. I had not migrated anything over to the K3s intance yet, so this was the perfect time to try it. I had installed it and getting from zero to Kubernetes was a much smoother installation than K3s. Once installed, I was not really able to configure the system much besides installing ArgoCD for GitOps, as I went travelling for a long while.&lt;/p&gt;
+&lt;h2&gt;The upgrade that broke everything&lt;span class="hx:absolute hx:-mt-20" id="the-upgrade-that-broke-everything"&gt;&lt;/span&gt;
+&lt;a href="#the-upgrade-that-broke-everything" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;But once I sat still for a little, I went back to it, and I had a bunch of upgrades waiting for me. I had a broader 8-step upgrade path planned for the whole stack, and step one was moving Talos from v1.10.4 to v1.10.9 before anything else.&lt;/p&gt;
+&lt;p&gt;The plan was simple:&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;Patch-first: Talos v1.10.4 to v1.10.9.&lt;/li&gt;
+&lt;li&gt;Then step through each Talos minor: v1.11.6, v1.12.9, v1.13.4.&lt;/li&gt;
+&lt;li&gt;Then Kubernetes, one minor at a time: v1.33 to v1.34 to v1.35 to v1.36.&lt;/li&gt;
+&lt;li&gt;Finally, we update &lt;code&gt;talenv.yaml&lt;/code&gt; at the end.&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;Sounds simple! And really it probably would have been if it wasn&amp;rsquo;t for this initial issue.&lt;/p&gt;
+&lt;p&gt;Per the docs, the first step is pretty easy:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;talosctl upgrade --nodes &lt;span class="s2"&gt;&amp;#34;&amp;lt;node-ip&amp;gt;&amp;#34;&lt;/span&gt; --image &lt;span class="s2"&gt;&amp;#34;factory.talos.dev/installer/&amp;lt;schematic&amp;gt;:v1.10.9&amp;#34;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And so the upgrade applied, and it triggered a reboot. But the server never came back. I could not ping it or reach the API.&lt;/p&gt;
+&lt;p&gt;Initially I didn&amp;rsquo;t think much of it. I searched very little, looked at the Hetzner vKVM, but didn&amp;rsquo;t investigate much. Since I had no data on there, I figured it&amp;rsquo;d be a lot easier to just reinstall it. So I did. But not long after I had to do another reboot, and so it happened again. This time we put on our Superman cape, and rescuse it.&lt;/p&gt;
+&lt;h2&gt;Rescue mode investigation&lt;span class="hx:absolute hx:-mt-20" id="rescue-mode-investigation"&gt;&lt;/span&gt;
+&lt;a href="#rescue-mode-investigation" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;So I went digging to understand why this was happening. The system was practically empty, so there was no reason for this to happen.&lt;/p&gt;
+&lt;p&gt;Hetzner lets you boot into a rescue system (PXE-booted Debian) when your server is unresponsive. From there I could inspect the disks directly. The following commands and outputs are excerpts from my rescue host scripts, with wrappers and locale warnings omitted.&lt;/p&gt;
+&lt;p&gt;First thing I checked was whether the disk was even intact:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;NAME SIZE TYPE FSTYPE LABEL MOUNTPOINT
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;loop0 3.8G loop ext2
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;loop1 10M loop ext2
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sda 1.8T disk
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;|&lt;/span&gt;-sda1 100M part crypto_LUKS
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;|&lt;/span&gt;-sda2 1M part
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;|&lt;/span&gt;-sda3 1000M part xfs BOOT
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;|&lt;/span&gt;-sda4 1M part
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="sb"&gt;`&lt;/span&gt;-sda5 1.8T part crypto_LUKS &lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Partitions were all there. The BOOT partition (sda3) mounted fine and contained both the current and upgraded Talos kernel/initramfs (Talos uses A/B slots for upgrades). So the upgrade itself had written successfully. The problem was during boot.&lt;/p&gt;
+&lt;h2&gt;Finding the error&lt;span class="hx:absolute hx:-mt-20" id="finding-the-error"&gt;&lt;/span&gt;
+&lt;a href="#finding-the-error" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I checked the Talos console, and from there I could see the boot TUI stuck at stage &amp;ldquo;Booting&amp;rdquo;:&lt;/p&gt;
+&lt;p&gt;&lt;img src="https://hoshsadiq.github.io/talos-rescue-mode-all-zero-uuid.png" alt="Talos boot console showing all-zero UUID" loading="lazy" /&gt;&lt;/p&gt;
+&lt;p&gt;The UUID field at the top reads &lt;code&gt;00000000-0000-0000-0000-000000000000&lt;/code&gt;, which looks odd. We will get back to that. More importantly, there is no hostname, Kubernetes status is unknown, and NTP is timing out. The system was alive but stuck: it could not decrypt the STATE partition, so it could not load the machine config, so nothing could proceed. The console showed the zero UUID.&lt;/p&gt;
+&lt;p&gt;The error on the console, transcribed from my notes rather than captured as terminal output:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;error opening encrypted volume: no handlers available to get encryption keys from:
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;1 error occurred: machine UUID 00000000-0000-0000-0000-000000000000 entropy check failed&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;So it seems the UUID is the machine UUID, i.e. the &lt;a href="https://cyberraiden.com/2026/08/03/smbios-uuid/"
+target="_blank" rel="noopener"
+&gt;SMBIOS UUID&lt;/a&gt;.&lt;/p&gt;
+&lt;h2&gt;Why the UUID matters&lt;span class="hx:absolute hx:-mt-20" id="why-the-uuid-matters"&gt;&lt;/span&gt;
+&lt;a href="#why-the-uuid-matters" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Talos&amp;rsquo;s &lt;code&gt;KeyNodeID&lt;/code&gt; encryption works like this:&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;Read the machine&amp;rsquo;s SMBIOS UUID (from DMI/BIOS tables)&lt;/li&gt;
+&lt;li&gt;Combine it with the partition label to form the LUKS passphrase&lt;/li&gt;
+&lt;li&gt;The passphrase format is literally &lt;code&gt;&amp;lt;UUID&amp;gt;&amp;lt;partition_label&amp;gt;&lt;/code&gt;, e.g. &lt;code&gt;&amp;lt;uuid&amp;gt;STATE&lt;/code&gt;&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;Aah, right. Okay, so Talos encrypts the STATE and EPHEMERAL partitions with LUKS, and the encryption key is derived from the machine&amp;rsquo;s SMBIOS UUID combined with the partition label. This is the &lt;a href="https://docs.siderolabs.com/talos/v1.13/configure-your-talos-cluster/storage-and-disk-management/disk-encryption"
+target="_blank" rel="noopener"
+&gt;&lt;code&gt;nodeID&lt;/code&gt; encryption method&lt;/a&gt; in Talos, which ties the disk to the specific hardware it was installed on.&lt;/p&gt;
+&lt;p&gt;This is not a secret key by itself, but since the fixed-label concatenation yields the LUKS passphrase, you should not publish the UUID in a post about the machine. &lt;code&gt;nodeID&lt;/code&gt; binds the disk to the machine, it does not keep the key hidden.&lt;/p&gt;
+&lt;p&gt;If the UUID is all zeros, the passphrase is wrong, LUKS will not open, and the STATE partition (which held the machine config, the node identity, and the saved platform network config) is inaccessible. In fact, Talos has a &lt;a href="https://github.com/siderolabs/talos/blob/main/internal/pkg/encryption/keys/nodeid.go"
+target="_blank" rel="noopener"
+&gt;very basic entropy check&lt;/a&gt; before deriving the key: it counts character frequency in the UUID string, and if any single character appears more than half the string length (strictly more than 18 out of 36 characters), it bails. An all-zero UUID has &lt;code&gt;0&lt;/code&gt; appearing 32 times, so it fails immediately. I suppose this check is there to prevent using a predictable or &amp;ldquo;empty&amp;rdquo; UUID as a key source.&lt;/p&gt;
+&lt;p&gt;So, Talos cannot load its machine config because it is on the encrypted STATE partition, and it cannot decrypt STATE because it is reading a bad UUID.&lt;/p&gt;
+&lt;h2&gt;But the hardware UUID is fine&lt;span class="hx:absolute hx:-mt-20" id="but-the-hardware-uuid-is-fine"&gt;&lt;/span&gt;
+&lt;a href="#but-the-hardware-uuid-is-fine" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;From rescue mode, I checked the actual hardware UUID:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ dmidecode -s system-uuid
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;A perfectly valid UUID. The hardware is reporting it correctly. The rescue system sees it fine. So why does Talos see all zeros? We can even verify this by trying to open the LUKS volume manually.&lt;/p&gt;
+&lt;p&gt;First, a failed attempt with just the UUID:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode excerpt&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nv"&gt;UUID&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nb"&gt;echo&lt;/span&gt; -n &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$UUID&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; cryptsetup open --type luks2 /dev/sda1 talos-state --key-file&lt;span class="o"&gt;=&lt;/span&gt;-
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;No key available with this passphrase.
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nb"&gt;echo&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;exit: &lt;/span&gt;&lt;span class="nv"&gt;$?&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;exit: &lt;span class="m"&gt;2&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And then the correct one with the partition label appended:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode excerpt&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nv"&gt;UUID&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nb"&gt;echo&lt;/span&gt; -n &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;UUID&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;STATE&amp;#34;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; cryptsetup open --type luks2 /dev/sda1 talos-state --key-file&lt;span class="o"&gt;=&lt;/span&gt;-
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nb"&gt;echo&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;exit: &lt;/span&gt;&lt;span class="nv"&gt;$?&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;exit: &lt;span class="m"&gt;0&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;That opened it. So why was Talos seeing zeros?&lt;/p&gt;
+&lt;h2&gt;The META partition&lt;span class="hx:absolute hx:-mt-20" id="the-meta-partition"&gt;&lt;/span&gt;
+&lt;a href="#the-meta-partition" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Talos has a small (1MB) metadata partition called META. It stores key-value pairs used during early boot, before the STATE partition is available.&lt;/p&gt;
+&lt;p&gt;It&amp;rsquo;s a binary format where each 256 KB block (ADV) starts with &lt;code&gt;magic1&lt;/code&gt; (&lt;code&gt;0x5a4b3c2d&lt;/code&gt;) and ends with &lt;code&gt;magic2&lt;/code&gt; (&lt;code&gt;0xa5b4c3d2&lt;/code&gt;). There is also a SHA-256 checksum calculated over the entire block with the checksum field itself zeroed out during the calculation. This is why a simple raw writer would fail: if you do not update the checksum and the magic2 trailer, Talos will reject the block as corrupt.&lt;/p&gt;
+&lt;p&gt;Let&amp;rsquo;s see what&amp;rsquo;s on there&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode excerpt&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ mkdir -p /mnt/state
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ mount /dev/mapper/talos-state /mnt/state
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ls -la /mnt/state
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;total &lt;span class="m"&gt;20&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;drwx------. &lt;span class="m"&gt;2&lt;/span&gt; root root &lt;span class="m"&gt;80&lt;/span&gt; Jun &lt;span class="m"&gt;19&lt;/span&gt; 02:05 .
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;drwxr-xr-x &lt;span class="m"&gt;1&lt;/span&gt; root root &lt;span class="m"&gt;60&lt;/span&gt; Jun &lt;span class="m"&gt;21&lt;/span&gt; 20:46 ..
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;-rw-------. &lt;span class="m"&gt;1&lt;/span&gt; root root &lt;span class="m"&gt;11706&lt;/span&gt; Jun &lt;span class="m"&gt;19&lt;/span&gt; 02:05 config.yaml
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;-rw-------. &lt;span class="m"&gt;1&lt;/span&gt; root root &lt;span class="m"&gt;53&lt;/span&gt; Jun &lt;span class="m"&gt;19&lt;/span&gt; 02:05 node-identity.yaml
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;-r--------. &lt;span class="m"&gt;1&lt;/span&gt; root root &lt;span class="m"&gt;192&lt;/span&gt; Jun &lt;span class="m"&gt;19&lt;/span&gt; 02:05 platform-network.yaml&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;I&amp;rsquo;ve now realised that the data is still there, and I can&amp;rsquo;t just rely on reinstalling. There is something fundamentally wrong with the way Talos interacts with this board. So I ended up searching for the error in the code, and traced it, and then did a few more searches. That&amp;rsquo;s when I landed on issue &lt;a href="https://github.com/siderolabs/talos/issues/9400"
+target="_blank" rel="noopener"
+&gt;siderolabs/talos#9400&lt;/a&gt;, where the authors suggest hardcoding the UUID in the META partition using &lt;code&gt;talosctl meta write&lt;/code&gt;.&lt;/p&gt;
+&lt;h2&gt;Building a tool to write META&lt;span class="hx:absolute hx:-mt-20" id="building-a-tool-to-write-meta"&gt;&lt;/span&gt;
+&lt;a href="#building-a-tool-to-write-meta" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The fix I needed was tag &lt;code&gt;0x0f&lt;/code&gt;: UUIDOverride. If this tag is present in META, Talos uses its value instead of reading from SMBIOS. This is the escape hatch for a machine whose UUID Talos cannot read, whatever the reason.&lt;/p&gt;
+&lt;p&gt;The problem, however, was that &lt;code&gt;talosctl meta write&lt;/code&gt; requires a running Talos API and my Talos is not booting. I needed to write directly to the raw block device from rescue mode. So I dug through the source further, found out how the cli writes the metadata to disk.&lt;/p&gt;
+&lt;p&gt;I had OpenCode write a small Go tool (&lt;a href="https://github.com/hoshsadiq/talos-meta"
+target="_blank" rel="noopener"
+&gt;&lt;code&gt;talos-meta&lt;/code&gt;&lt;/a&gt;) that manages the META binary format and can read/write tags directly to &lt;code&gt;/dev/sda4&lt;/code&gt;. I ended up having to vendor the original Talos META packages for this because a simple raw write would fail without the correct checksum and magic2 trailer. The format uses big-endian encoding for tags and lengths, and each block must end with a specific terminator (0 tag and 0 length) followed by the SHA-256 checksum and the &lt;code&gt;magic2&lt;/code&gt; trailer.&lt;/p&gt;
+&lt;p&gt;Now I can read and write the tags from the META partition.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ /tmp/talos-meta &lt;span class="nb"&gt;read&lt;/span&gt; --device /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:33 META: loading from /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;0x06 upgrade A
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;0x09 stateencryptionconfig &lt;span class="o"&gt;{&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;EncryptionProvider&amp;#34;&lt;/span&gt;:&lt;span class="s2"&gt;&amp;#34;luks2&amp;#34;&lt;/span&gt;,&lt;span class="s2"&gt;&amp;#34;EncryptionKeys&amp;#34;&lt;/span&gt;:&lt;span class="o"&gt;[{&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;KeyStatic&amp;#34;&lt;/span&gt;:null,&lt;span class="s2"&gt;&amp;#34;KeyNodeID&amp;#34;&lt;/span&gt;:&lt;span class="o"&gt;{}&lt;/span&gt;,&lt;span class="s2"&gt;&amp;#34;KeyKMS&amp;#34;&lt;/span&gt;:null,&lt;span class="s2"&gt;&amp;#34;KeySlot&amp;#34;&lt;/span&gt;:0,&lt;span class="s2"&gt;&amp;#34;KeyTPM&amp;#34;&lt;/span&gt;:null&lt;span class="o"&gt;}]&lt;/span&gt;,&lt;span class="s2"&gt;&amp;#34;EncryptionCipher&amp;#34;&lt;/span&gt;:&lt;span class="s2"&gt;&amp;#34;&amp;#34;&lt;/span&gt;,&lt;span class="s2"&gt;&amp;#34;EncryptionKeySize&amp;#34;&lt;/span&gt;:0,&lt;span class="s2"&gt;&amp;#34;EncryptionBlockSize&amp;#34;&lt;/span&gt;:0,&lt;span class="s2"&gt;&amp;#34;EncryptionPerfOptions&amp;#34;&lt;/span&gt;:null&lt;span class="o"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:33 META: loaded &lt;span class="m"&gt;2&lt;/span&gt; keys&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;It had two existing tags:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;0x06&lt;/code&gt;: Upgrade slot indicator (&lt;code&gt;A&lt;/code&gt; or &lt;code&gt;B&lt;/code&gt;)&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;0x09&lt;/code&gt;: StateEncryptionConfig (confirming &lt;code&gt;KeyNodeID&lt;/code&gt; is the encryption method)&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Then from rescue mode we can write the tag directly:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode excerpt&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ /tmp/talos-meta write --device /dev/sda4 --tag UUIDOverride --value &lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: loading from /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: loaded &lt;span class="m"&gt;2&lt;/span&gt; keys
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: saving to /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: saved &lt;span class="m"&gt;3&lt;/span&gt; keys
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: loading from /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;written: 0x0f &lt;span class="o"&gt;(&lt;/span&gt;uuidoverride&lt;span class="o"&gt;)&lt;/span&gt; &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;verified: read-back matches
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: loaded &lt;span class="m"&gt;3&lt;/span&gt; keys&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;This writes the UUID override to both the primary and backup regions of the META partition. In my case I just used the UUID from system uuid.&lt;/p&gt;
+&lt;h2&gt;Finally???&lt;span class="hx:absolute hx:-mt-20" id="finally"&gt;&lt;/span&gt;
+&lt;a href="#finally" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;After writing the UUID override, I rebooted. But it&amp;rsquo;s still not working. I then booted into the vKVM guest with the same passed-through disk, and this time the API and health checks came up. The guest successfully proved the META override was usable to decrypt the partition there and it was finally able to decrypt the STATE partition and load the configuration.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ talosctl get systeminformation --nodes &lt;span class="s2"&gt;&amp;#34;&amp;lt;node-ip&amp;gt;&amp;#34;&lt;/span&gt; -o yaml
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;node: &lt;span class="s2"&gt;&amp;#34;123.123.123.123&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;metadata:
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; namespace: hardware
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; type: SystemInformations.hardware.talos.dev
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; id: systeminformation
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; version: &lt;span class="m"&gt;1&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; owner: hardware.SystemInfoController
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; phase: running
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; created: 2026-06-21T21:08:51Z
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; updated: 2026-06-21T21:08:51Z
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;spec:
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; manufacturer: QEMU
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; productName: Standard PC &lt;span class="o"&gt;(&lt;/span&gt;Q35 + ICH9, 2009&lt;span class="o"&gt;)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; version: pc-q35-7.2
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; uuid: &lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; wakeUpType: Power Switch&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The cluster was healthy:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ talosctl health --nodes &lt;span class="s2"&gt;&amp;#34;123.123.123.123&amp;#34;&lt;/span&gt; --wait-timeout 5m
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;discovered nodes: &lt;span class="o"&gt;[&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;123.123.123.123&amp;#34;&lt;/span&gt;&lt;span class="o"&gt;]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; etcd to be healthy: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; etcd members to be consistent across nodes: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; apid to be ready: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; kubelet to be healthy: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; all k8s nodes to report ready: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And kubectl confirmed the node was Ready:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl get nodes --server &lt;span class="s2"&gt;&amp;#34;https://123.123.123.123:6443&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;NAME STATUS ROLES AGE VERSION
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;talos-homelab-cp0 Ready control-plane 2d21h v1.33.11&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Now I need to understand why it refuses to boot outside of vKVM.&lt;/p&gt;
+&lt;h2&gt;The bare metal complication&lt;span class="hx:absolute hx:-mt-20" id="the-bare-metal-complication"&gt;&lt;/span&gt;
+&lt;a href="#the-bare-metal-complication" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The vKVM success was encouraging but not the end. When I exited vKVM and let the server boot on bare metal, it had a different problem: networking did not come up.&lt;/p&gt;
+&lt;p&gt;To understand why, I ended up getting physical KVM access so I was able to observe what was going on when the system boots up in its natural habitat (directly on the hardware). This doubly confirmed out UUID fix, but the networking is not coming up at all. This explains why Talos doesn&amp;rsquo;t boot. Within the TUI, you can confirm the network by pressing F3.&lt;/p&gt;
+&lt;p&gt;&lt;img src="https://hoshsadiq.github.io/talos-bare-metal-no-gateway.png" alt="Talos not network" loading="lazy" /&gt;&lt;/p&gt;
+&lt;p&gt;I didn&amp;rsquo;t capture it, but on bare metal, during boot, it was trying to start networking with &lt;code&gt;eth0&lt;/code&gt;, but this did not exist, so the address, route and gateway never applied. The gateway itself was valid. The config just attached to an interface that was not there. The system could boot and decrypt the disks, but it could not reach the network to join the cluster or even respond to &lt;code&gt;talosctl&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;Hetzner&amp;rsquo;s vKVM network-boots a small Debian rescue system, which then starts your installed OS as a QEMU/KVM guest with the physical disks passed straight through. After checking the cmdline, I looked at the cmdline, and saw &lt;code&gt;net.ifnames=0&lt;/code&gt; was there, which turns off predictable interface names.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;/proc/cmdline&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;initrd=initrd.img nfsdir=[2a01:4ff:ff00::b007:1]:/nfs RFILE=rescue-amd64-bookworm-v012.ext2 VKVM=vkvm64-bookworm-overlay.ext2 HASH=$6$&amp;lt;redacted&amp;gt; CUSTOM_PASSWORD=true net.ifnames=0 vga=0x317 lang=de quiet IP6=2a01:4f8:120:84e6:: IP6MASK=64 IP6GW=fe80::1 keyboard=us BOOTIF=01-90:1b:0e:e0:d7:06&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Bare metal Talos is different. Its GRUB entry has no such flag:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ grep -c &lt;span class="s2"&gt;&amp;#34;net.ifnames&amp;#34;&lt;/span&gt; /mnt/boot/grub/grub.cfg
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="m"&gt;0&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Somewhere somehow, something happened that caused Talos to configure itself with the old unpredictable interface. My guess is the vKVM qemu instance uses virtio NIC, and caused it to write to the network config, but the real hardware is an Intel NIC, which may have caused it to only register on the predictable device path. Regardless, I hardcoded the interface to the correct one via the TUI, rebooted, and voila we&amp;rsquo;re back.&lt;/p&gt;
+&lt;p&gt;Lastly, I changed the interface in &lt;code&gt;config.yaml&lt;/code&gt; from &lt;code&gt;eth0&lt;/code&gt; to &lt;code&gt;enp0s31f6&lt;/code&gt;, committed that.&lt;/p&gt;
+&lt;h2&gt;Lessons&lt;span class="hx:absolute hx:-mt-20" id="lessons"&gt;&lt;/span&gt;
+&lt;a href="#lessons" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;&lt;strong&gt;Take a backup before writing to META.&lt;/strong&gt; I did not &lt;code&gt;dd&lt;/code&gt; the META partition before modifying it. The tool read the existing tags and wrote them back with the new one, and the read-back confirmed all three were intact, so nothing was lost. But I should have taken a copy first. &lt;code&gt;dd if=/dev/sda4 of=/tmp/meta-backup.bin&lt;/code&gt; would have taken seconds and given me a way back if the write had gone wrong. Note that &lt;code&gt;/tmp&lt;/code&gt; in the rescue RAM is volatile; any backup stored there must be copied to a remote host before rebooting, or it will be lost.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Talos&amp;rsquo;s UUID override exists for a reason.&lt;/strong&gt; The &lt;code&gt;0x0f&lt;/code&gt; META tag is there for machines whose UUID Talos cannot read. It works regardless of why the UUID is wrong, so it&amp;rsquo;s worth always hardcoding it.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Get the right console for bare metal.&lt;/strong&gt; vKVM runs your installed OS as a QEMU guest, so it only shows you the guest, not the physical boot. To watch a physical boot you need the real KVM console. I spent time looking at the wrong screen because of this.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;The &lt;code&gt;reclaim-the-stack/talos-manager&lt;/code&gt; project exists.&lt;/strong&gt; It&amp;rsquo;s a tool that handles exactly this Hetzner UUID problem (among other Talos management tasks). Worth looking at if you&amp;rsquo;re running Talos on Hetzner at any scale.&lt;/p&gt;
+&lt;h2&gt;References&lt;span class="hx:absolute hx:-mt-20" id="references"&gt;&lt;/span&gt;
+&lt;a href="#references" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;&lt;a href="https://docs.siderolabs.com/talos/v1.13/configure-your-talos-cluster/storage-and-disk-management/disk-encryption"
+target="_blank" rel="noopener"
+&gt;Talos disk encryption docs&lt;/a&gt;: &lt;code&gt;KeyNodeID&lt;/code&gt; encryption method explanation&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://github.com/siderolabs/talos/blob/main/internal/pkg/encryption/keys/nodeid.go"
+target="_blank" rel="noopener"
+&gt;UUID entropy check source&lt;/a&gt;: the character frequency check that rejects all-zero UUIDs&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://github.com/siderolabs/talos/commit/6eade3d5e"
+target="_blank" rel="noopener"
+&gt;Commit adding UUID override (META key 0x0f)&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://docs.siderolabs.com/talos/v1.13/learn-more/architecture"
+target="_blank" rel="noopener"
+&gt;Talos architecture docs&lt;/a&gt;: META partition layout and purpose&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://github.com/siderolabs/talos/blob/main/pkg/machinery/meta/constants.go"
+target="_blank" rel="noopener"
+&gt;META partition constants&lt;/a&gt;: tag definitions (0x06 Upgrade, 0x09 StateEncryptionConfig, 0x0f UUIDOverride)&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://docs.siderolabs.com/talos/v1.13/platform-specific-installations/bare-metal-platforms/metal-network-configuration"
+target="_blank" rel="noopener"
+&gt;Metal network configuration&lt;/a&gt;: &lt;code&gt;talosctl meta write&lt;/code&gt; for network config on bare metal&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://github.com/reclaim-the-stack/talos-manager"
+target="_blank" rel="noopener"
+&gt;reclaim-the-stack/talos-manager&lt;/a&gt;: documents the Hetzner UUID scenario and other Talos management tasks&lt;/li&gt;
+&lt;/ul&gt;</description></item><item><title>Hetzner's odd default Firewall rule</title><link>https://hoshsadiq.github.io/blog/k3s-hetzner-egress-debugging/</link><pubDate>Tue, 26 Aug 2025 00:00:00 +0000</pubDate><guid>https://hoshsadiq.github.io/blog/k3s-hetzner-egress-debugging/</guid><description>
+&lt;p&gt;Pods in my k3s cluster on a Hetzner dedicated server were failing to reach external services. Spoiler: Hetzner&amp;rsquo;s default Firewall rules (probably?) don&amp;rsquo;t make sense.&lt;/p&gt;
+&lt;p&gt;It took a few hours of investigation to finally understand this issue.&lt;/p&gt;
+&lt;h2&gt;The setup&lt;span class="hx:absolute hx:-mt-20" id="the-setup"&gt;&lt;/span&gt;
+&lt;a href="#the-setup" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I am running a single-node k3s cluster on a Hetzner dedicated server.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;k3s single-node cluster (Hetzner dedicated, Rocky Linux 9.7)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; IP: 203.0.113.50
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; Interface: enp0s31f6
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; |
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; +-- flannel.1 (VXLAN)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; +-- cni0 (bridge)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; | +-- veth* (pod interfaces)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; +-- tailscale0 (MTU 1280)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Pod CIDR: 10.42.0.0/16
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Service CIDR: 10.43.0.0/16
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Flannel backend: VXLAN
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;iptables: v1.8.10 (nf_tables backend)&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Some details about the setup:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;I&amp;rsquo;m using Rocky Linux 9.7&lt;/li&gt;
+&lt;li&gt;Running k3s v1.34.4&lt;/li&gt;
+&lt;li&gt;Tailscale is running on the host for remote access&lt;/li&gt;
+&lt;li&gt;I have not enabled host-level firewalls such as firewalld&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;I was trying to set up ArgoCD on this k3s installation, but for some reason, the repo-server timed out while adding a git repository with &lt;code&gt;context deadline exceeded (Client.Timeout exceeded while awaiting headers)&lt;/code&gt;. Very strange as, anecdotally, I am able to connect to GitHub normally within the cluster from some pods.&lt;/p&gt;
+&lt;h2&gt;Isolating the problem&lt;span class="hx:absolute hx:-mt-20" id="isolating-the-problem"&gt;&lt;/span&gt;
+&lt;a href="#isolating-the-problem" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;First step: determine if this is an ArgoCD problem or a network problem. I created a debug pod using the netshoot image to run some tests. This pod will be used regularly down the line so let&amp;rsquo;s just keep it running and exec into it.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;pod-network test&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl run debug-net --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never -- sleep infinity
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod/debug-net created&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;I already confirmed I could clone once, so to see if this was a transient issue, I ran a simple loop to test connectivity to GitHub from within the pod network.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;10&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl &lt;span class="nb"&gt;exec&lt;/span&gt; -i debug-net -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -I&lt;span class="o"&gt;{}&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; curl -sS -o /dev/null -w &lt;span class="s2"&gt;&amp;#34;attempt {}: %{http_code} %{time_connect}\n&amp;#34;&lt;/span&gt; --connect-timeout &lt;span class="m"&gt;5&lt;/span&gt; https://github.com
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;200&lt;/span&gt; 0.006835
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 4: &lt;span class="m"&gt;200&lt;/span&gt; 0.006701
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 5: &lt;span class="m"&gt;200&lt;/span&gt; 0.006855
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 6: &lt;span class="m"&gt;200&lt;/span&gt; 0.006965
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 7: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 8: &lt;span class="m"&gt;200&lt;/span&gt; 0.006903
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 9: &lt;span class="m"&gt;200&lt;/span&gt; 0.006652
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;200&lt;/span&gt; 0.006639&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Notice we have 3 items where the http code is &lt;code&gt;000&lt;/code&gt;, and the connect time is 0. That means 3 out of 10 failures. Now let&amp;rsquo;s try the same test from a host-network pod:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;host-network test&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;10&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl run debug-host -i --rm --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true}}&amp;#39;&lt;/span&gt; -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -I&lt;span class="o"&gt;{}&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; curl -sS -o /dev/null -w &lt;span class="s2"&gt;&amp;#34;attempt {}: %{http_code} %{time_connect}\n&amp;#34;&lt;/span&gt; --connect-timeout &lt;span class="m"&gt;5&lt;/span&gt; https://github.com
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;200&lt;/span&gt; 0.005891
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;200&lt;/span&gt; 0.006012
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;200&lt;/span&gt; 0.005934
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;200&lt;/span&gt; 0.005998
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-host&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;10 out of 10 success. So this is not GitHub being flaky. Something about the pod network path is different.&lt;/p&gt;
+&lt;h2&gt;Ruling out the usual suspects&lt;span class="hx:absolute hx:-mt-20" id="ruling-out-the-usual-suspects"&gt;&lt;/span&gt;
+&lt;a href="#ruling-out-the-usual-suspects" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;h3&gt;Hypothesis: MTU fragmentation&lt;span class="hx:absolute hx:-mt-20" id="hypothesis-mtu-fragmentation"&gt;&lt;/span&gt;
+&lt;a href="#hypothesis-mtu-fragmentation" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;This was an unnecessary wild goose chase I got into due to AI. It made no sense, but I figured I&amp;rsquo;d try and eliminate this. The hypothesis was that VXLAN adds overhead to every packet, so our 1500-byte MTU wasn&amp;rsquo;t leaving enough room (i.e. packets were getting too big). The breakdown is: outer IP (20) + UDP (8) + VXLAN header (8) + inner Ethernet (14) = 50 bytes. Since the host MTU is 1500, the inner MTU must be 1450.&lt;/p&gt;
+&lt;p&gt;The Maximum Segment Size (MSS) advertised in SYN packets should be inner MTU - 20 (IP header) - 20 (TCP header) = 1410.&lt;/p&gt;
+&lt;p&gt;I checked the pod MTU:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl &lt;span class="nb"&gt;exec&lt;/span&gt; debug-net -- cat /sys/class/net/eth0/mtu
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="m"&gt;1450&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Okay, so that&amp;rsquo;s correct. If MTU was the issue, I&amp;rsquo;d expect successful connections that break during data transfer, not connections that fail to establish at all. Meaning MTU is unlikely to be the cause. I confirmed later in tcpdump that both successful and failed SYNs showed &lt;code&gt;mss 1410&lt;/code&gt;, which matches the expected 1450 inner MTU.&lt;/p&gt;
+&lt;h3&gt;Hypothesis: conntrack exhaustion&lt;span class="hx:absolute hx:-mt-20" id="hypothesis-conntrack-exhaustion"&gt;&lt;/span&gt;
+&lt;a href="#hypothesis-conntrack-exhaustion" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Conntrack is the kernel&amp;rsquo;s connection tracking table. Every connection gets an entry. If the table fills up, new connections are dropped.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ssh hetzner-server cat /proc/sys/net/netfilter/nf_conntrack_count
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="m"&gt;823&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ssh hetzner-server cat /proc/sys/net/netfilter/nf_conntrack_max
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="m"&gt;262144&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ssh hetzner-server conntrack -S
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;cpu&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;0&lt;/span&gt; &lt;span class="nv"&gt;found&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;0&lt;/span&gt; &lt;span class="nv"&gt;invalid&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;22283&lt;/span&gt; &lt;span class="nv"&gt;insert&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;0&lt;/span&gt; &lt;span class="nv"&gt;insert_failed&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;212&lt;/span&gt; &lt;span class="nv"&gt;drop&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;212&lt;/span&gt; &lt;span class="nv"&gt;early_drop&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;0&lt;/span&gt; ...&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Only 823 out of 262,144 entries used. The stats showed 212 &lt;code&gt;insert_failed&lt;/code&gt; and 212 &lt;code&gt;drop&lt;/code&gt; over 12 million forwarded packets. Conntrack is unlikely to be the issue here.&lt;/p&gt;
+&lt;h2&gt;tcpdump on the physical interface&lt;span class="hx:absolute hx:-mt-20" id="tcpdump-on-the-physical-interface"&gt;&lt;/span&gt;
+&lt;a href="#tcpdump-on-the-physical-interface" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;This is where the investigation got interesting. I ran tcpdump on the host on &lt;code&gt;enp0s31f6&lt;/code&gt;, the physical NIC. Capturing here is key because it shows packets after they have passed through the entire kernel networking stack, that is iptables, NAT, and routing. I.e. if a packet appears here, it left the host.&lt;/p&gt;
+&lt;p&gt;I generated some pod traffic to github.com (&lt;code&gt;140.82.121.3&lt;/code&gt;) from the same &lt;code&gt;debug-net&lt;/code&gt; pod and watched the physical interface on the host.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;tcpdump -i enp0s31f6 -nn host 140.82.121.3&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:18:59.827 203.0.113.50.23475 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:00.868 203.0.113.50.23475 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:02.916 203.0.113.50.23475 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:06.948 203.0.113.50.23475 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:07.870 203.0.113.50.13577 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:08.932 203.0.113.50.13577 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:10.980 203.0.113.50.13577 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:15.012 203.0.113.50.13577 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:15.840 203.0.113.50.59127 &amp;gt; 140.82.121.3.443: Flags [S], mss 1410, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:15.845 140.82.121.3.443 &amp;gt; 203.0.113.50.59127: Flags [S.], mss 1436, ...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10:19:15.845 203.0.113.50.59127 &amp;gt; 140.82.121.3.443: Flags [.], ack 1, ...&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Okay, this is interesting, the only difference is the source port. Three connections were attempted. Two failed, one succeeded.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;Source port 23475&lt;/strong&gt;: Four SYN retransmits. No SYN-ACK ever arrives.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Source port 13577&lt;/strong&gt;: Same pattern. Four retransmits. No SYN-ACK.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Source port 59127&lt;/strong&gt;: SYN goes out, SYN-ACK comes back in 5ms. Handshake completes.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;I checked the conntrack table on the host to see how these connections were being tracked:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;ssh hetzner-server conntrack -L -d 140.82.121.3&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;ipv4 2 tcp 6 52 SYN_SENT src=10.42.0.125 dst=140.82.121.3 sport=58162 dport=443
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; [UNREPLIED] src=140.82.121.3 dst=203.0.113.50 sport=443 dport=13577
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;ipv4 2 tcp 6 44 SYN_SENT src=10.42.0.125 dst=140.82.121.3 sport=46978 dport=443
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; [UNREPLIED] src=140.82.121.3 dst=203.0.113.50 sport=443 dport=23475&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The pod&amp;rsquo;s original source port (e.g. 58162) was being SNAT&amp;rsquo;d to a new port (e.g. 13577) by flannel&amp;rsquo;s MASQUERADE rule. The &lt;code&gt;[UNREPLIED]&lt;/code&gt; flag means the SYN went out, but nothing came back.&lt;/p&gt;
+&lt;p&gt;My first thought was that maybe GitHub has some DDoS protection which was dropping some SYNs. It would be very weird, but I&amp;rsquo;ve seen weirder stuff in my life. Anyway, this happened with various other destinations I tested, so it couldn&amp;rsquo;t have been GitHub.&lt;/p&gt;
+&lt;h2&gt;More dead ends&lt;span class="hx:absolute hx:-mt-20" id="more-dead-ends"&gt;&lt;/span&gt;
+&lt;a href="#more-dead-ends" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;h3&gt;Theory: bridge-nf-call-iptables&lt;span class="hx:absolute hx:-mt-20" id="theory-bridge-nf-call-iptables"&gt;&lt;/span&gt;
+&lt;a href="#theory-bridge-nf-call-iptables" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;&lt;code&gt;bridge-nf-call-iptables&lt;/code&gt; is a sysctl that makes bridged frames (Layer 2 traffic on &lt;code&gt;cni0&lt;/code&gt;) pass through iptables rules. Kubernetes requires this so that iptables DNAT rules can redirect pod DNS queries to the CoreDNS ClusterIP.&lt;/p&gt;
+&lt;p&gt;I suspected that with this enabled, packets from pods might be traversing the iptables &lt;code&gt;FORWARD&lt;/code&gt; chain twice, once as a bridged frame and once as a routed packet. Maybe something in the second pass was dropping them. Let&amp;rsquo;s find out by using &lt;code&gt;nsenter&lt;/code&gt;:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl run --rm -it debug-brtest --image&lt;span class="o"&gt;=&lt;/span&gt;alpine --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true,&amp;#34;hostPID&amp;#34;:true,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;containers&amp;#34;:[{&amp;#34;name&amp;#34;:&amp;#34;debug-brtest&amp;#34;,&amp;#34;image&amp;#34;:&amp;#34;alpine&amp;#34;,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;securityContext&amp;#34;:{&amp;#34;privileged&amp;#34;:true},
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;command&amp;#34;:[&amp;#34;sh&amp;#34;,&amp;#34;-c&amp;#34;,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;nsenter -t 1 -m -u -n -i -- sysctl -w net.bridge.bridge-nf-call-iptables=0&amp;#34;]}]}}&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;net.bridge.bridge-nf-call-iptables &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="m"&gt;0&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-brtest&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Then I retested from the debug-net pod:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl &lt;span class="nb"&gt;exec&lt;/span&gt; debug-net -- nslookup github.com
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;;;&lt;/span&gt; communications error to 10.43.0.10#53: timed out
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;;;&lt;/span&gt; communications error to 10.43.0.10#53: timed out
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;;;&lt;/span&gt; communications error to 10.43.0.10#53: timed out
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;;;&lt;/span&gt; no servers could be reached&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;This change broke DNS is completely.&lt;/p&gt;
+&lt;p&gt;CoreDNS runs as a pod behind a ClusterIP service (10.43.0.10). Pods send DNS queries to that IP. iptables DNAT rewrites the destination to the actual CoreDNS pod IP. But DNS queries from pods travel over the &lt;code&gt;cni0&lt;/code&gt; bridge. Without &lt;code&gt;bridge-nf-call-iptables&lt;/code&gt;, those bridged frames skip iptables entirely, and the DNAT never happens.&lt;/p&gt;
+&lt;p&gt;Reverted immediately:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl run --rm -it debug-brrevert --image&lt;span class="o"&gt;=&lt;/span&gt;alpine --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true,&amp;#34;hostPID&amp;#34;:true,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;containers&amp;#34;:[{&amp;#34;name&amp;#34;:&amp;#34;debug-brrevert&amp;#34;,&amp;#34;image&amp;#34;:&amp;#34;alpine&amp;#34;,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;securityContext&amp;#34;:{&amp;#34;privileged&amp;#34;:true},
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;command&amp;#34;:[&amp;#34;sh&amp;#34;,&amp;#34;-c&amp;#34;,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#34;nsenter -t 1 -m -u -n -i -- sysctl -w net.bridge.bridge-nf-call-iptables=1&amp;#34;]}]}}&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;net.bridge.bridge-nf-call-iptables &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="m"&gt;1&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-brrevert&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;DNS came back. Not the cause of the egress failures, and disabling it makes things worse.&lt;/p&gt;
+&lt;h3&gt;Theory: Tailscale routing&lt;span class="hx:absolute hx:-mt-20" id="theory-tailscale-routing"&gt;&lt;/span&gt;
+&lt;a href="#theory-tailscale-routing" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Tailscale adds policy routing rules with fwmark. I checked what the routing setup looked like on the host:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;on the host&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ip rule list
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;0: from all lookup &lt;span class="nb"&gt;local&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5210: from all fwmark 0x80000/0xff0000 lookup main
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5230: from all fwmark 0x80000/0xff0000 lookup default
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5250: from all fwmark 0x80000/0xff0000 unreachable
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5270: from all lookup &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;32766: from all lookup main
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;32767: from all lookup default&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Rule 5270 sends all traffic through table 52. What is in table 52?&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;on the host&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ip route show table &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.73.38.121 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.76.113.4 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.84.202.35 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.100.100.100 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.126.184.59 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ip route show table main
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;default via 203.0.113.1 dev enp0s31f6 proto static metric &lt;span class="m"&gt;100&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;10.42.0.0/24 dev cni0 proto kernel scope link src 10.42.0.1
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;203.0.113.1 dev enp0s31f6 proto static scope link metric &lt;span class="m"&gt;100&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Table 52 only contains routes to Tailscale peers (100.x.x.x addresses). For anything else, such as github.com, the lookup finds no match and falls through to the main table, which has the correct default route via 203.0.113.1 on &lt;code&gt;enp0s31f6&lt;/code&gt;. Tailscale is not interfering.&lt;/p&gt;
+&lt;h2&gt;Final hypothesis&lt;span class="hx:absolute hx:-mt-20" id="final-hypothesis"&gt;&lt;/span&gt;
+&lt;a href="#final-hypothesis" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I kept coming back to the tcpdump. The only variable between success and failure was the source port. Failed connections used ports 23475, 13577, and 4905. Successful ones used ports 59127, 32980, and 33364.&lt;/p&gt;
+&lt;p&gt;Then I noticed the pattern: every successful port was at or above 32767. Every failed port was below it.&lt;/p&gt;
+&lt;p&gt;Normal host-originated connections use the kernel&amp;rsquo;s ephemeral port range, defined by &lt;code&gt;net.ipv4.ip_local_port_range&lt;/code&gt;. This defaults to 32768-60999. This explains why host-network pods always work as they always pick from this range.&lt;/p&gt;
+&lt;p&gt;But flannel&amp;rsquo;s MASQUERADE rule uses &lt;code&gt;--random-fully&lt;/code&gt;, which picks from the entire 1024-65535 range. So this defines roughly half to be below 32768.&lt;/p&gt;
+&lt;p&gt;What if Hetzner&amp;rsquo;s upstream network, perhaps their firewall, drops packets with source ports below the ephemeral range? It&amp;rsquo;d be a strange rule, but it&amp;rsquo;s worth testing.&lt;/p&gt;
+&lt;h2&gt;Proving it&lt;span class="hx:absolute hx:-mt-20" id="proving-it"&gt;&lt;/span&gt;
+&lt;a href="#proving-it" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I tested this hypothesis by forcing a host-network pod to use specific source ports. Luckily curl makes this very easy (I say that, but I had no idea curl could do this! Goes to show that you can still learn in the age of AI)!&lt;/p&gt;
+&lt;h3&gt;Test 1: Host-network with random ports across full range (1024-65535)&lt;span class="hx:absolute hx:-mt-20" id="test-1-host-network-with-random-ports-across-full-range-1024-65535"&gt;&lt;/span&gt;
+&lt;a href="#test-1-host-network-with-random-ports-across-full-range-1024-65535" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;20&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl run --rm -i debug-hostent --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true}}&amp;#39;&lt;/span&gt; -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -P4 -I&lt;span class="o"&gt;{}&lt;/span&gt; sh -c &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; port=$((1024 + (RANDOM * 32768 + RANDOM) % 64512))
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; curl -4 -sS -o /dev/null --connect-timeout 1 --local-port &amp;#34;$port&amp;#34; -w &amp;#34;attempt {}: %{http_code} %{time_connect} port=$port&amp;gt;%{remote_port}\n&amp;#34; \
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; https://github.com 2&amp;gt;/dev/null
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; awk &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; /^attempt/{ suffix = ($3 == &amp;#34;000&amp;#34; ? &amp;#34;# FAIL&amp;#34; : &amp;#34;# OK&amp;#34;); print $0, suffix }
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; !/^attempt/{print}
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;29107&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;13023&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;12952&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 4: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;32583&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 5: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;30166&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 6: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;7871&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 7: &lt;span class="m"&gt;200&lt;/span&gt; 0.006227 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;36653&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 8: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;4996&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 9: &lt;span class="m"&gt;200&lt;/span&gt; 0.006177 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;64349&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;27149&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 11: &lt;span class="m"&gt;200&lt;/span&gt; 0.006101 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;33977&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 12: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;28723&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 13: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;17720&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 14: &lt;span class="m"&gt;200&lt;/span&gt; 0.006135 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;39524&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 15: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;20350&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 16: &lt;span class="m"&gt;200&lt;/span&gt; 0.006291 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;45679&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 17: &lt;span class="m"&gt;200&lt;/span&gt; 0.006395 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;50737&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 18: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;30045&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 19: &lt;span class="m"&gt;000&lt;/span&gt; 0.000000 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;21561&amp;gt;-1 &lt;span class="c1"&gt;# FAIL&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 20: &lt;span class="m"&gt;200&lt;/span&gt; 0.006196 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;35555&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod default/debug-hostent terminated &lt;span class="o"&gt;(&lt;/span&gt;Error&lt;span class="o"&gt;)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-hostent&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;So 13 out of 20 failed, all successful ports were above 32767.&lt;/p&gt;
+&lt;h3&gt;Test 2: Host-network with ephemeral ports only (32768-65535)&lt;span class="hx:absolute hx:-mt-20" id="test-2-host-network-with-ephemeral-ports-only-32768-65535"&gt;&lt;/span&gt;
+&lt;a href="#test-2-host-network-with-ephemeral-ports-only-32768-65535" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;host-network pod&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;20&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl run --rm -i debug-hostent --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true}}&amp;#39;&lt;/span&gt; -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -P4 -I&lt;span class="o"&gt;{}&lt;/span&gt; sh -c &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; port=$((RANDOM + 32768))
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; curl -4 -sS -o /dev/null --connect-timeout 1 --local-port &amp;#34;$port&amp;#34; -w &amp;#34;attempt {}: %{http_code} %{time_connect} port=$port&amp;gt;%{remote_port}\n&amp;#34; \
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; https://github.com 2&amp;gt;/dev/null
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; awk &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; /^attempt/{ suffix = ($3 == &amp;#34;000&amp;#34; ? &amp;#34;# FAIL&amp;#34; : &amp;#34;# OK&amp;#34;); print $0, suffix }
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; !/^attempt/{print}
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;200&lt;/span&gt; 0.006302 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;64072&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;200&lt;/span&gt; 0.006250 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;34944&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;200&lt;/span&gt; 0.006293 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;35875&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 4: &lt;span class="m"&gt;200&lt;/span&gt; 0.006265 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;51814&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 5: &lt;span class="m"&gt;200&lt;/span&gt; 0.006103 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;55567&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 8: &lt;span class="m"&gt;200&lt;/span&gt; 0.006113 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;37204&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 7: &lt;span class="m"&gt;200&lt;/span&gt; 0.006007 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;45957&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 6: &lt;span class="m"&gt;200&lt;/span&gt; 0.006120 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;54278&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;200&lt;/span&gt; 0.006099 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;61168&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 9: &lt;span class="m"&gt;200&lt;/span&gt; 0.006177 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;55307&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 12: &lt;span class="m"&gt;200&lt;/span&gt; 0.006225 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;33839&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 11: &lt;span class="m"&gt;200&lt;/span&gt; 0.006135 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;50660&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 13: &lt;span class="m"&gt;200&lt;/span&gt; 0.006047 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;39438&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 15: &lt;span class="m"&gt;200&lt;/span&gt; 0.006071 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;51600&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 16: &lt;span class="m"&gt;200&lt;/span&gt; 0.006132 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;47960&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 14: &lt;span class="m"&gt;200&lt;/span&gt; 0.006105 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;58884&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 17: &lt;span class="m"&gt;200&lt;/span&gt; 0.006617 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;42085&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 18: &lt;span class="m"&gt;200&lt;/span&gt; 0.006116 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;62988&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 19: &lt;span class="m"&gt;200&lt;/span&gt; 0.006086 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;51691&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 20: &lt;span class="m"&gt;200&lt;/span&gt; 0.006161 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;37760&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-hostent&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;All requests succeeded. It seems something somewhere in Hetzner&amp;rsquo;s network was possibly dropping incoming SYN-ACK packets with source ports below less than 32767.&lt;/p&gt;
+&lt;h2&gt;Root cause&lt;span class="hx:absolute hx:-mt-20" id="root-cause"&gt;&lt;/span&gt;
+&lt;a href="#root-cause" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;So it seems the root cause was a combination of Hetzner&amp;rsquo;s upstream filtering and flannel&amp;rsquo;s default MASQUERADE behavior.&lt;/p&gt;
+&lt;p&gt;Flannel uses &lt;code&gt;--random-fully&lt;/code&gt; in its MASQUERADE rules.&lt;/p&gt;
+&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Is &lt;code&gt;--random-fully&lt;/code&gt; the right default? Why does flannel use it?&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;It reduces the chance of conntrack 5-tuple collisions when many pods make connections simultaneously. The kernel&amp;rsquo;s &lt;code&gt;--random&lt;/code&gt; option picks from the ephemeral range, but &lt;code&gt;--random-fully&lt;/code&gt; uses the full range to reduce collision. It is a reasonable default for most networks, but it is clearly incompatible with some firewall rule in Hetzner&amp;rsquo;s network.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;p&gt;I checked the source code to see if k3s or flannel could be configured to avoid this.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;Flannel has a &lt;code&gt;--ip-masq-fully-random-disable&lt;/code&gt; CLI flag that switches from &lt;code&gt;--random-fully&lt;/code&gt; to &lt;code&gt;--random&lt;/code&gt;.&lt;/li&gt;
+&lt;li&gt;The flannel traffic manager interface accepts this as the &lt;a href="https://github.com/flannel-io/flannel/blob/f17c3c7fb58ba68e725736badeeaf4af63ec38c0/pkg/trafficmngr/trafficmngr.go#L54"
+target="_blank" rel="noopener"
+&gt;&lt;code&gt;ipMasqRandomFullyDisable&lt;/code&gt; parameter&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;K3s embeds flannel and &lt;a href="https://github.com/k3s-io/k3s/blob/39ccf3e075b465b6969f5eb7cdce52acebb1aa53/pkg/agent/flannel/flannel.go#L111-L114"
+target="_blank" rel="noopener"
+&gt;always passes &lt;code&gt;false&lt;/code&gt;&lt;/a&gt; for this parameter.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;So, there is no k3s server flag or config option to change it.&lt;/p&gt;
+&lt;h2&gt;The workaround&lt;span class="hx:absolute hx:-mt-20" id="the-workaround"&gt;&lt;/span&gt;
+&lt;a href="#the-workaround" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;At this point I wanted to figure why Hetzner&amp;rsquo;s network was dropping these packets so my next thought was to raise a ticket with them. But I figured before I do that, I needed a workaround. I decided to constrain MASQUERADE for pod egress to use only ephemeral ports. This meant inserting two iptables rules in the &lt;code&gt;POSTROUTING&lt;/code&gt; chain before flannel&amp;rsquo;s own jump rule.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;on the host&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ iptables -t nat -I POSTROUTING &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -s 10.42.0.0/16 ! -d 224.0.0.0/4 -p tcp &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -m comment --comment &lt;span class="s2"&gt;&amp;#34;hetzner-ephemeral-masq&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -j MASQUERADE --to-ports 32768-60999
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ iptables -t nat -I POSTROUTING &lt;span class="m"&gt;2&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -s 10.42.0.0/16 ! -d 224.0.0.0/4 -p udp &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -m comment --comment &lt;span class="s2"&gt;&amp;#34;hetzner-ephemeral-masq&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -j MASQUERADE --to-ports 32768-60999&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;After applying these, I get all successes again.&lt;/p&gt;
+&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Why not insert these rules into flannel&amp;rsquo;s own chain?&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Because flannel will delete them. K3s has embedded Flannel, and calls various Flannel functions to resync every minute or so. Any custom rules inserted there get wiped. Rules in the top-level &lt;code&gt;POSTROUTING&lt;/code&gt; chain, placed before the jump to &lt;code&gt;FLANNEL-POSTRTG&lt;/code&gt;, survive the resync.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;h2&gt;Making it permanent&lt;span class="hx:absolute hx:-mt-20" id="making-it-permanent"&gt;&lt;/span&gt;
+&lt;a href="#making-it-permanent" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The workaround obviously needs to survive reboots, and since k3s won&amp;rsquo;t let me configure it correctly, I created a systemd service to apply these changes at boot.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;/etc/systemd/system/k3s-hetzner-masq-fix.service&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-ini" data-lang="ini"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Unit]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Description&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;Restrict flannel MASQUERADE to ephemeral ports (Hetzner workaround)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;After&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;k3s.service&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Requires&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;k3s.service&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Service]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Type&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;oneshot&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;RemainAfterExit&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;yes&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;ExecStartPre&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;/bin/bash -c &amp;#39;until iptables -t nat -L FLANNEL-POSTRTG &amp;amp;&amp;gt;/dev/null; do sleep 2; done&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;ExecStart&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;/usr/local/bin/k3s-hetzner-masq-fix.sh&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Restart&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;on-failure&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;RestartSec&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;30&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Install]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;WantedBy&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;multi-user.target&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;/usr/local/bin/k3s-hetzner-masq-fix.sh&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="cp"&gt;#!/usr/bin/env bash
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;set&lt;/span&gt; -euo pipefail
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;CIDR&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;10.42.0.0/16&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;COMMENT&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;hetzner-ephemeral-masq&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;for&lt;/span&gt; proto in tcp udp&lt;span class="p"&gt;;&lt;/span&gt; &lt;span class="k"&gt;do&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; iptables -t nat -D POSTROUTING &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -s &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$CIDR&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; ! -d 224.0.0.0/4 &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -p &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$proto&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -m comment --comment &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$COMMENT&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -j MASQUERADE --to-ports 32768-60999 2&amp;gt;/dev/null &lt;span class="o"&gt;||&lt;/span&gt; &lt;span class="nb"&gt;true&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; iptables -t nat -I POSTROUTING &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -s &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$CIDR&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; ! -d 224.0.0.0/4 &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -p &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$proto&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -m comment --comment &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$COMMENT&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; -j MASQUERADE --to-ports 32768-60999
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;done&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;h2&gt;The actual fix&lt;span class="hx:absolute hx:-mt-20" id="the-actual-fix"&gt;&lt;/span&gt;
+&lt;a href="#the-actual-fix" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;After deploying the workaround, I was in the middle of raising a ticket with Hetzner to understand this, but as I searched a bit further, I came across issue &lt;a href="https://github.com/k3s-io/k3s/issues/5220"
+target="_blank" rel="noopener"
+&gt;k3s-io/k3s#5220&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;It turned out that the dedicated Hetzner server has a provider-level firewall outside the machine itself. I had noticed it when I bought the server at auction, but had forgotten it existed. One of its default rules accepts TCP packets with the ACK flag set only when their destination port is in the range &lt;code&gt;32767–65535&lt;/code&gt;. TCP packets with &lt;code&gt;ACK&lt;/code&gt; set and destination ports below that range are dropped.&lt;/p&gt;
+&lt;p&gt;Checking for &lt;code&gt;ACK&lt;/code&gt; is just a rough way to distinguish reply traffic from new inbound TCP connections, and often can make sense as a firewall setting. However, it is not equivalent to connection tracking since any packet can have &lt;code&gt;ACK&lt;/code&gt; set.&lt;/p&gt;
+&lt;p&gt;The problem is that the rule assumes packets are sent and on the kernel’s usual ephemeral-port range, 32767–65535, and thus, packets will come back on the same range. This is of course a default, and individual applications can override this, as Flannel&amp;rsquo;s &lt;code&gt;MASQUERADE --random-fully&lt;/code&gt; does. It can choose any source port including one below 32767, same way we were able to do so with &lt;code&gt;curl&lt;/code&gt;. This means the reply comes back to a port Hetzner’s firewall drops.&lt;/p&gt;
+&lt;p&gt;So I updated it to be 1024-65535. I disabled the iptables workaround and tested low local ports again:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ seq &lt;span class="m"&gt;1&lt;/span&gt; &lt;span class="m"&gt;20&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; kubectl run --rm -i debug-hostent --image&lt;span class="o"&gt;=&lt;/span&gt;nicolaka/netshoot --restart&lt;span class="o"&gt;=&lt;/span&gt;Never &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --overrides&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;{&amp;#34;spec&amp;#34;:{&amp;#34;hostNetwork&amp;#34;:true}}&amp;#39;&lt;/span&gt; -- &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; xargs -P4 -I&lt;span class="o"&gt;{}&lt;/span&gt; sh -c &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; port=$((1024 + RANDOM % 31745))
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; curl -4 -sS -o /dev/null --connect-timeout 1 --local-port &amp;#34;$port&amp;#34; -w &amp;#34;attempt {}: %{http_code} %{time_connect} port=$port&amp;gt;%{remote_port}\n&amp;#34; \
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; https://github.com 2&amp;gt;/dev/null
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; awk &lt;span class="s1"&gt;&amp;#39;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; /^attempt/{ suffix = ($3 == &amp;#34;000&amp;#34; ? &amp;#34;# FAIL&amp;#34; : &amp;#34;# OK&amp;#34;); print $0, suffix }
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; !/^attempt/{print}
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="s1"&gt; &amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 2: &lt;span class="m"&gt;200&lt;/span&gt; 0.006344 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;14771&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 1: &lt;span class="m"&gt;200&lt;/span&gt; 0.006288 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;6139&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 4: &lt;span class="m"&gt;200&lt;/span&gt; 0.006352 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;24501&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 3: &lt;span class="m"&gt;200&lt;/span&gt; 0.006274 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;12774&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 7: &lt;span class="m"&gt;200&lt;/span&gt; 0.006076 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;3857&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 5: &lt;span class="m"&gt;200&lt;/span&gt; 0.006291 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;29052&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 6: &lt;span class="m"&gt;200&lt;/span&gt; 0.006066 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;1610&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 8: &lt;span class="m"&gt;200&lt;/span&gt; 0.007296 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;9568&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 9: &lt;span class="m"&gt;200&lt;/span&gt; 0.006178 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;15316&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 10: &lt;span class="m"&gt;200&lt;/span&gt; 0.006077 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;20026&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 11: &lt;span class="m"&gt;200&lt;/span&gt; 0.005950 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;27545&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 12: &lt;span class="m"&gt;200&lt;/span&gt; 0.006437 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;31795&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 15: &lt;span class="m"&gt;200&lt;/span&gt; 0.005950 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;16112&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 14: &lt;span class="m"&gt;200&lt;/span&gt; 0.005901 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;31181&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 13: &lt;span class="m"&gt;200&lt;/span&gt; 0.006270 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;15968&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 16: &lt;span class="m"&gt;200&lt;/span&gt; 0.006159 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;18248&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 17: &lt;span class="m"&gt;200&lt;/span&gt; 0.006543 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;11026&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 19: &lt;span class="m"&gt;200&lt;/span&gt; 0.005981 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;29464&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 18: &lt;span class="m"&gt;200&lt;/span&gt; 0.006164 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;32431&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;attempt 20: &lt;span class="m"&gt;200&lt;/span&gt; 0.006216 &lt;span class="nv"&gt;port&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;1130&amp;gt;443 &lt;span class="c1"&gt;# OK&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;pod &lt;span class="s2"&gt;&amp;#34;debug-hostent&amp;#34;&lt;/span&gt; deleted from default namespace&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;All 20 succeeded. The ports that were being blackholed now work fine.&lt;/p&gt;
+&lt;p&gt;It&amp;rsquo;s a strange rule to add as a default, but at least there&amp;rsquo;s a fix.&lt;/p&gt;
+&lt;p&gt;I do wonder if I had given Claude full responsibility to figure this out, if it would have found the issue sooner.&lt;/p&gt;</description></item></channel></rss>

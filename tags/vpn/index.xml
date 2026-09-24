@@ -1,0 +1,480 @@
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Hosh's Blog – VPN</title><link>https://hoshsadiq.github.io/tags/vpn/</link><description>Recent content in VPN on Hosh's Blog</description><generator>Hugo -- gohugo.io</generator><language>en-gb</language><lastBuildDate>Sat, 07 Feb 2026 00:00:00 +0000</lastBuildDate><atom:link href="https://hoshsadiq.github.io/tags/vpn/index.xml" rel="self" type="application/rss+xml"/><item><title>Tailscale exit nodes on GL.iNet routers</title><link>https://hoshsadiq.github.io/blog/tailscale-exit-node-openwrt/</link><pubDate>Sat, 07 Feb 2026 00:00:00 +0000</pubDate><guid>https://hoshsadiq.github.io/blog/tailscale-exit-node-openwrt/</guid><description>
+&lt;p&gt;I just needed to route all LAN client traffic on my router through the Tailscale exit node. My GL.iNet router had other ideas.&lt;/p&gt;
+&lt;p&gt;I work remotely, and travel during the weekends. To keep my tech consistent everywhere I go, I always carry around a smaller router (the GL.iNet MT3000) running openWRT.&lt;/p&gt;
+&lt;p&gt;This router has saved in more ways though, as it has a built-in VPN clients for various VPN provider including my preferred provider, Mullvad. In some countries some services are blocked, sometimes by the client or sometimes by the country, so VPN becomes essential.&lt;/p&gt;
+&lt;p&gt;Using Mullvad, however convenient, does sometimes introduce issues. For example:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;YouTube refuses to let you watch unless you sign in (yes, I&amp;rsquo;m aware of Invidious).&lt;/li&gt;
+&lt;li&gt;You get vastly more captcha solving.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;There are probably other issues that I am forgetting, but, to address this, I asked a family member to help me out. Run a Pi in their home, so I can run Tailscale and use it as an exit node.&lt;/p&gt;
+&lt;p&gt;So, once the Pi was set up, and booted, I was given SSH access by said family member, and from there installing Tailscale was very simple, and once configured to act as an exit node, it was as easy as updating my laptop&amp;rsquo;s Tailscale config to use said exit node.&lt;/p&gt;
+&lt;p&gt;And the exit node worked perfectly too! As my family member has a Gigabit Fibre broadband, I was able to max out my measly 50mbps. So next, let&amp;rsquo;s configure it on the router so that all LAN devices are able to use the exit node automatically. Once configured&amp;hellip; nothing&amp;hellip; There was no network.&lt;/p&gt;
+&lt;p&gt;This post is the investigation to see why this was not working. It took several hours, multiple wrong hypotheses, and a fix that turned out to be one iptables rule.&lt;/p&gt;
+&lt;h2&gt;The setup&lt;span class="hx:absolute hx:-mt-20" id="the-setup"&gt;&lt;/span&gt;
+&lt;a href="#the-setup" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;LAN clients (192.168.8.0/24)
+|
+v (br-lan)
+GL.iNet MT3000 router (192.168.8.1 / Tailscale: 100.84.202.35)
+|
+v (apclix0 -- repeater uplink to 192.168.1.0/24)
+Upstream router (192.168.1.1) --&amp;gt; Internet (public IP: 74.247.222.60)
+Tailscale exit node:
+Raspberry Pi (Tailscale: 100.76.113.4 / public IP: 104.147.211.28)&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;ul&gt;
+&lt;li&gt;Router: GL.iNet MT3000, OpenWRT 21.02-SNAPSHOT, Tailscale 1.80.3&lt;/li&gt;
+&lt;li&gt;Exit node: Raspberry Pi, advertising itself as an exit node on the same tailnet&lt;/li&gt;
+&lt;li&gt;Router is configured as a repeater (WAN side is 192.168.1.0/24, LAN side is 192.168.8.0/24)&lt;/li&gt;
+&lt;li&gt;All LAN clients use 192.168.8.1 as their default gateway&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;The goal: when I enable the Tailscale exit node on the router, every device on 192.168.8.0/24 should egress through the Pi&amp;rsquo;s internet connection instead of the router&amp;rsquo;s WAN.&lt;/p&gt;
+&lt;h2&gt;What the docs say&lt;span class="hx:absolute hx:-mt-20" id="what-the-docs-say"&gt;&lt;/span&gt;
+&lt;a href="#what-the-docs-say" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;At this point I have almost exclusively used the GL.iNet UI. Later, I&amp;rsquo;ll realise that this was probably a mistake, and I should have followed OpenWRT&amp;rsquo;s instructions.&lt;/p&gt;
+&lt;h2&gt;What Tailscale support said&lt;span class="hx:absolute hx:-mt-20" id="what-tailscale-support-said"&gt;&lt;/span&gt;
+&lt;a href="#what-tailscale-support-said" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Having made sure I followed all the configuration necessary, and validating the information, I was stumped. I contact Tailscale support (super impressed that they have support for free customers by the way!!). They said the router can only use the exit node for its own traffic (I already knew this). For LAN devices to route through the exit node, I would need to configure the router as a subnet router (advertising 192.168.8.0/24) and disable SNAT. I was expecting both of these configurations to be done by default when enabling Tailscale&amp;rsquo;s exit node in the router&amp;rsquo;s UI. The admin panel certainly showed the routes were advertised.&lt;/p&gt;
+&lt;h2&gt;Checking the baseline&lt;span class="hx:absolute hx:-mt-20" id="checking-the-baseline"&gt;&lt;/span&gt;
+&lt;a href="#checking-the-baseline" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;With Tailscale enabled on the router (but no exit node set), the routing rules looked like this:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-shell" data-lang="shell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;root@GL-MT3000:~# ip rule show
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="c1"&gt;# ...&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;5270: from all lookup &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;6000: from all fwmark 0x8000/0xf000 lookup main
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="c1"&gt;# ...&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;9920: from all iif br-lan blackhole
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="c1"&gt;# ...&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Rule 5270 consults table 52 for all traffic. This is the route table created and managed by Tailscale.
+Rule 6000 is GL.iNet&amp;rsquo;s default policy, which routes marked traffic via the main table.
+Rule 9920 is a kill-switch: if nothing matched above, blackhole LAN traffic (prevents leaks when a VPN tunnel is configured).&lt;/p&gt;
+&lt;p&gt;Notice rule 5270 has no &lt;code&gt;fwmark&lt;/code&gt; condition and it is &lt;code&gt;from all&lt;/code&gt;. This means table 52 is consulted regardless of what GL.iNet&amp;rsquo;s rules do to the packet mark. If table 52 has a matching route, it wins before rule 6000 ever fires.&lt;/p&gt;
+&lt;p&gt;Let&amp;rsquo;s see what in the route table 52.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;root@GL-MT3000:~# ip route show table &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.73.38.121 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.76.113.4 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.100.100.100 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.124.213.124 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.126.184.59 dev tailscale0&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Without an exit node, it only contains routes to specific Tailscale peers, no default route. Internet traffic from LAN clients follows the normal path: the GL.iNet VPN policy routing marks packets with &lt;code&gt;0x8000/0xf000&lt;/code&gt; in the mangle table, which ip rule priority 6000 matches to send through the main routing table, hitting &lt;code&gt;default via 192.168.1.1 dev apclix0&lt;/code&gt;: the normal WAN egress.&lt;/p&gt;
+&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Mangle table? That&amp;rsquo;s not a real word.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;The user iptablesnoob &lt;a href="https://serverfault.com/a/774964"
+&lt;p&gt;target=&amp;quot;_blank&amp;quot; rel=&amp;ldquo;noopener&amp;rdquo;&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;puts this quite well&lt;/a&gt;:&lt;/p&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;blockquote&gt;
+&lt;p&gt;The mangle table allows to modify some special entries in the header of packets. (such: Type of Service, Time To Live ) (it also allows to set special marks and security context marks)&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;h2&gt;Enabling the exit node&lt;span class="hx:absolute hx:-mt-20" id="enabling-the-exit-node"&gt;&lt;/span&gt;
+&lt;a href="#enabling-the-exit-node" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Let&amp;rsquo;s see what changes in the Tailscale route table when I enabled the exit node.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# tailscale debug prefs
+{
+&amp;#34;ControlURL&amp;#34;: &amp;#34;https://controlplane.tailscale.com&amp;#34;,
+&amp;#34;RouteAll&amp;#34;: true,
+&amp;#34;ExitNodeID&amp;#34;: &amp;#34;npbtV5ZPiC21CNTRL&amp;#34;,
+&amp;#34;ExitNodeIP&amp;#34;: &amp;#34;&amp;#34;,
+&amp;#34;LoggedOut&amp;#34;: false,
+&amp;#34;AdvertiseRoutes&amp;#34;: [
+&amp;#34;192.168.1.0/24&amp;#34;,
+&amp;#34;192.168.8.0/24&amp;#34;
+],
+&amp;#34;NoSNAT&amp;#34;: false
+// ...
+}&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The &lt;code&gt;AdvertiseRoutes&lt;/code&gt; seems correct, though I wasn&amp;rsquo;t expected the WAN subnet to be advertised. But &lt;code&gt;NoSNAT&lt;/code&gt; seems wrong.&lt;/p&gt;
+&lt;h2&gt;Hypothesis 1: SNAT issues&lt;span class="hx:absolute hx:-mt-20" id="hypothesis-1-snat-issues"&gt;&lt;/span&gt;
+&lt;a href="#hypothesis-1-snat-issues" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;SNAT is surely the issue if the support engineer mentioned it?&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Indeed! I thought I had set this already.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;p&gt;So we&amp;rsquo;ve enabled exit node within the UI, but there is no way to set the SNAT options. We&amp;rsquo;ll have to do it via the CLI.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# tailscale set --snat-subnet-routes=false
+root@GL-MT3000:~# tailscale debug prefs | grep -A3 -e AdvertiseRoutes -e NoSNAT
+&amp;#34;AdvertiseRoutes&amp;#34;: [
+&amp;#34;192.168.1.0/24&amp;#34;,
+&amp;#34;192.168.8.0/24&amp;#34;
+],
+--
+&amp;#34;NoSNAT&amp;#34;: true,
+&amp;#34;NoStatefulFiltering&amp;#34;: true,
+&amp;#34;NetfilterMode&amp;#34;: 2,
+&amp;#34;AutoUpdate&amp;#34;: {&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Okay! Perfect. Let&amp;rsquo;s test it.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;
+$ curl --connect-timeout 1 https://ifconfig.me
+curl: (28) Failed to connect to ifconfig.me port 443 after 1006 ms: Timeout was reached&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Still nothing.&lt;/p&gt;
+&lt;h2&gt;Hypothesis 2: routing or firewall is wrong&lt;span class="hx:absolute hx:-mt-20" id="hypothesis-2-routing-or-firewall-is-wrong"&gt;&lt;/span&gt;
+&lt;a href="#hypothesis-2-routing-or-firewall-is-wrong" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Now let&amp;rsquo;s look at table 52 again with exit node enabled. We&amp;rsquo;re seeing a new default route, and it&amp;rsquo;s skipping local traffic:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;root@GL-MT3000:~p# ip route show table &lt;span class="m"&gt;52&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;default dev tailscale0 &lt;span class="c1"&gt;# &amp;lt;-- new&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.73.38.121 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;100.76.113.4 dev tailscale0
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;throw 127.0.0.0/8
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;throw 192.168.1.0/24
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;throw 192.168.8.0/23&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;That &lt;code&gt;default dev tailscale0&lt;/code&gt; means all internet-bound traffic now matches in table 52, at ip rule priority 5270, before GL.iNet&amp;rsquo;s next routing rule. Both the router&amp;rsquo;s own traffic and forwarded LAN traffic should go into the Tailscale tunnel.&lt;/p&gt;
+&lt;p&gt;I verified with &lt;code&gt;ip route get&lt;/code&gt;, simulating a LAN client packet with the GL.iNet mangle mark:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;root@GL-MT3000:~# ip route get 8.8.8.8 from 192.168.8.209 iif br-lan mark 0x8000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;8.8.8.8 from 192.168.8.209 dev tailscale0 table &lt;span class="m"&gt;52&lt;/span&gt; mark 0x8000
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; cache iif br-lan&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Great! The kernel confirms this: a packet from a LAN client heading to 8.8.8.8, even with the mangle mark applied, would be routed to &lt;code&gt;tailscale0&lt;/code&gt; via table 52. The routing layer was correct.&lt;/p&gt;
+&lt;p&gt;I also checked the firewall. Tailscale&amp;rsquo;s own chains in the filter table:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# iptables -t filter -S ts-forward
+-N ts-forward
+-A ts-forward -i tailscale0 -j MARK --set-xmark 0x40000/0xff0000
+-A ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+-A ts-forward -s 100.64.0.0/10 -o tailscale0 -j DROP
+-A ts-forward -o tailscale0 -j ACCEPT&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Traffic forwarded to &lt;code&gt;tailscale0&lt;/code&gt; is explicitly accepted so no firewall block.&lt;/p&gt;
+&lt;p&gt;This also seems to not be an issue. The kernel routes LAN packets to tailscale0. The firewall allows them through.&lt;/p&gt;
+&lt;p&gt;I confirmed this with iptables counters by zeroing the counters, 464 packets were forwarded from br-lan to tailscale0 in short period. Zero packets went to apclix0 (the WAN interface).&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# iptables -Z INPUT
+root@GL-MT3000:~# iptables -Z OUTPUT
+root@GL-MT3000:~# iptables -Z FORWARD
+root@GL-MT3000:~# iptables -I INPUT 1 -i tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_IN&amp;#34;
+root@GL-MT3000:~# iptables -I OUTPUT 1 -o tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_OUT&amp;#34;
+root@GL-MT3000:~# iptables -I FORWARD 1 -i br-lan -o tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_FWD&amp;#34;
+root@GL-MT3000:~# iptables -I FORWARD 2 -i br-lan -o apclix0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_WAN_FWD&amp;#34;
+root@GL-MT3000:~# conntrack -F
+conntrack v1.4.6 (conntrack-tools): connection tracking table has been emptied.
+root@GL-MT3000:~# iptables -L INPUT -n -v | grep tailscale0 -C3
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+pkts bytes target prot opt in out source destination
+1 76 ACCEPT all -- tailscale0 * 0.0.0.0/0 0.0.0.0/0 /* DEBUG_TS_IN */
+203 18127 ts-input all -- * * 0.0.0.0/0 0.0.0.0/0
+0 0 ACCEPT icmp -- br-lan * 0.0.0.0/0 0.0.0.0/0 icmptype 8 limit: avg 25/sec burst 5
+0 0 LOG icmp -- br-lan * 0.0.0.0/0 0.0.0.0/0 icmptype 8 limit: avg 1/sec burst 5 LOG flags 0 level 4
+--
+0 0 zone_wan_input all -- eth0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+72 2016 zone_wan_input all -- apclix0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_guest_input all -- br-guest * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_tailscale0_input all -- tailscale0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+root@GL-MT3000:~# iptables -L OUTPUT -n -v | grep tailscale0 -C3
+Chain OUTPUT (policy ACCEPT 0 packets, 0 bytes)
+pkts bytes target prot opt in out source destination
+7 457 ACCEPT all -- * tailscale0 0.0.0.0/0 0.0.0.0/0 /* DEBUG_TS_OUT */
+1 180 ACCEPT all -- * lo 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+595 78591 output_rule all -- * * 0.0.0.0/0 0.0.0.0/0 /* !fw3: Custom output rule chain */
+525 70342 ACCEPT all -- * * 0.0.0.0/0 0.0.0.0/0 ctstate RELATED,ESTABLISHED /* !fw3 */
+--
+0 0 zone_wan_output all -- * eth0 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+69 8197 zone_wan_output all -- * apclix0 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_guest_output all -- * br-guest 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_tailscale0_output all -- * tailscale0 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+root@GL-MT3000:~# iptables -L FORWARD -n -v | grep tailscale0 -C3
+Chain FORWARD (policy DROP 0 packets, 0 bytes)
+pkts bytes target prot opt in out source destination
+371 23838 ACCEPT all -- br-lan tailscale0 0.0.0.0/0 0.0.0.0/0 /* DEBUG_TS_FWD */
+0 0 ACCEPT all -- br-lan apclix0 0.0.0.0/0 0.0.0.0/0 /* DEBUG_WAN_FWD */
+117 9348 ts-forward all -- * * 0.0.0.0/0 0.0.0.0/0
+0 0 DROP all -- * * 0.0.0.0/0 0.0.0.0/0 match-set GL_MAC_BLOCK src
+--
+0 0 zone_wan_forward all -- eth0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_wan_forward all -- apclix0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_guest_forward all -- br-guest * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 zone_tailscale0_forward all -- tailscale0 * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+0 0 reject all -- * * 0.0.0.0/0 0.0.0.0/0 /* !fw3 */
+root@GL-MT3000:~# cat /proc/net/nf_conntrack | grep &amp;#34;192.168.8&amp;#34; | grep -v &amp;#34;dst=192.168.8&amp;#34;
+root@GL-MT3000:~# iptables -D FORWARD -i br-lan -o tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_FWD&amp;#34;
+root@GL-MT3000:~# iptables -D FORWARD -i br-lan -o apclix0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_WAN_FWD&amp;#34;
+root@GL-MT3000:~# iptables -D INPUT -i tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_IN&amp;#34;
+root@GL-MT3000:~# iptables -D OUTPUT -o tailscale0 -j ACCEPT -m comment --comment &amp;#34;DEBUG_TS_OUT&amp;#34;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;So 464 packets went in. Nothing came back.&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;p&gt;Let&amp;rsquo;s validate using tcpdump.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;$ ping -c4 1.1.1.1
+PING 1.1.1.1 (1.1.1.1): 56 data bytes
+Request timeout for icmp_seq 0
+Request timeout for icmp_seq 1
+Request timeout for icmp_seq 2
+--- 1.1.1.1 ping statistics ---
+4 packets transmitted, 0 packets received, 100.0% packet loss&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# tcpdump -i tailscale0 -n &amp;#39;host 192.168.8.209 and host 1.1.1.1&amp;#39;
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on tailscale0, link-type RAW (Raw IP), capture size 262144 bytes
+20:45:13.787471 IP 192.168.8.209 &amp;gt; 1.1.1.1: ICMP echo request, id 36938, seq 0, length 64
+20:45:14.796386 IP 192.168.8.209 &amp;gt; 1.1.1.1: ICMP echo request, id 36938, seq 1, length 64
+20:45:15.844514 IP 192.168.8.209 &amp;gt; 1.1.1.1: ICMP echo request, id 36938, seq 2, length 64
+20:45:16.798100 IP 192.168.8.209 &amp;gt; 1.1.1.1: ICMP echo request, id 36938, seq 3, length 64&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;No echo replies. But this is interesting. The source IP is my LAN IP. This is certainly not expected. If this was NATed, I&amp;rsquo;d expected it the source IP to be the Tailscale IP.&lt;/p&gt;
+&lt;h2&gt;The packets go in but nothing comes back&lt;span class="hx:absolute hx:-mt-20" id="the-packets-go-in-but-nothing-comes-back"&gt;&lt;/span&gt;
+&lt;a href="#the-packets-go-in-but-nothing-comes-back" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Okay, let&amp;rsquo;s check why SNAT is not working.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# uci show firewall | grep &amp;#34;=zone&amp;#34; | grep tailscale
+firewall.tailscale0=zone
+root@GL-MT3000:~# uci show firewall.tailscale0=zone
+firewall.tailscale0=zone
+firewall.tailscale0.name=&amp;#39;tailscale0&amp;#39;
+firewall.tailscale0.input=&amp;#39;ACCEPT&amp;#39;
+firewall.tailscale0.mtu_fix=&amp;#39;1&amp;#39;
+firewall.tailscale0.device=&amp;#39;tailscale0&amp;#39;
+firewall.tailscale0.output=&amp;#39;ACCEPT&amp;#39;
+firewall.tailscale0.forward=&amp;#39;REJECT&amp;#39;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Oh, this certainly would explain it. I would expect it to be &lt;code&gt;masq='1'&lt;/code&gt;.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# iptables -t nat -S | grep -i masq
+-A zone_wan_postrouting -m comment --comment &amp;#34;!fw3&amp;#34; -j MASQUERADE&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And there is no &lt;code&gt;POSTROUTING&lt;/code&gt; rule &lt;code&gt;MASQUERADE&lt;/code&gt; for &lt;code&gt;tailscale0&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;Let&amp;rsquo;s force a minimal rule for this.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;root@GL-MT3000:~# iptables -t nat -A POSTROUTING -o tailscale0 -s 192.168.8.0/24 -j MASQUERADE&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And let&amp;rsquo;s test it&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;pre&gt;&lt;code&gt;$ curl https://ifconfig.me
+45.159.89.9&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Hallelujah! It&amp;rsquo;s working. Now we need to make this permanent.&lt;/p&gt;
+&lt;h2&gt;Making the fix permanent&lt;span class="hx:absolute hx:-mt-20" id="making-the-fix-permanent"&gt;&lt;/span&gt;
+&lt;a href="#making-the-fix-permanent" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;section class="conversation" role="region" aria-label="Conversation"&gt;
+&lt;div class="say say--character"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;E&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="El Pato"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;El Pato&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Did you check the docs for OpenWRT to see why this is?&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class="say say--author"&gt;
+&lt;div class="say__avatar" aria-hidden="true"&gt;&lt;span class="say__avatar-initial"&gt;H&lt;/span&gt;&lt;/div&gt;
+&lt;div class="say__bubble" aria-label="Hosh"&gt;
+&lt;span class="say__name say__name--sr-only"&gt;Hosh&lt;/span&gt;
+&lt;div class="say__content"&gt;&lt;p&gt;Uuuh&amp;hellip;&lt;/p&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/section&gt;
+&lt;p&gt;So at this point, I started looking at the &lt;a href="https://openwrt.org/docs/guide-user/services/vpn/tailscale/start?s[]=ad&amp;amp;s[]=commit"
+target="_blank" rel="noopener"
+&gt;OpenWRT docs for Tailscale&lt;/a&gt;, and started the setup from scratch.&lt;/p&gt;
+&lt;p&gt;New Firewall rule&amp;hellip;&lt;/p&gt;
+&lt;p&gt;There is it!&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;Masquerading: &lt;strong&gt;on&lt;/strong&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;When using the GL.iNet UI to enable traffic through an exit node, it seems it does not set the masquerading option for the new tailscale network. This needs to be done manually in LuCI (available at System &amp;gt; Advanced Settings). The rule is already added, but masquerading is not enabled. Enabling that fixes the traffic in the same way.&lt;/p&gt;
+&lt;h2&gt;Lesson learned&lt;span class="hx:absolute hx:-mt-20" id="lesson-learned"&gt;&lt;/span&gt;
+&lt;a href="#lesson-learned" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;This seems like something I should have caught early on by simply checking the docs. Well, sometimes you just don&amp;rsquo;t need a manual.&lt;/p&gt;</description></item></channel></rss>

@@ -1,0 +1,387 @@
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Hosh's Blog – Talos</title><link>https://hoshsadiq.github.io/tags/talos/</link><description>Recent content in Talos on Hosh's Blog</description><generator>Hugo -- gohugo.io</generator><language>en-gb</language><lastBuildDate>Sun, 22 Feb 2026 00:00:00 +0000</lastBuildDate><atom:link href="https://hoshsadiq.github.io/tags/talos/index.xml" rel="self" type="application/rss+xml"/><item><title>Talos Linux won't boot: all-zero UUID on Hetzner dedicated servers</title><link>https://hoshsadiq.github.io/blog/talos-uuid-hetzner/</link><pubDate>Sun, 22 Feb 2026 00:00:00 +0000</pubDate><guid>https://hoshsadiq.github.io/blog/talos-uuid-hetzner/</guid><description>
+&lt;p&gt;I just needed to upgrade my Kubernetes cluster. My Hetzner dedicated server had other ideas.&lt;/p&gt;
+&lt;h2&gt;The setup&lt;span class="hx:absolute hx:-mt-20" id="the-setup"&gt;&lt;/span&gt;
+&lt;a href="#the-setup" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I run my homelab on a Kubernetes cluster using Talos Linux. The hardware is a Hetzner dedicated server I bought at auction, a Fujitsu ESPRIMO with a hardware RAID controller.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Hetzner dedicated server (Fujitsu ESPRIMO-FTS, D3401-H2)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; Talos Linux v1.10.4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; Disk: /dev/sda (LogicalDrv 0, hardware RAID)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda1: STATE (LUKS encrypted)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda2: BIOS boot
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda3: BOOT (XFS)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda4: META (1MB, Talos metadata)
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sda5: EPHEMERAL (LUKS encrypted)&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Over the past few months, I have been experimenting with various ways to run my homelab. I have a few services currently running at home on a small fleet of Raspberry Pis, and I have been planning to migrate them to something more robust. I tried configuring everything using various different orchestration methods, but none felt really intuitive to me.&lt;/p&gt;
+&lt;p&gt;I tried Portainer, but that seems to be going towards the closed source route (I know it is not yet, but the trajectory is already set). Then I tried Komo.do. I really wanted it to work, but the workflow was just not great. The system writes back to the git, and I really struggled to get automated syncs to work, and certainly there were a few places where the sync just refused to happen because of a chicken and egg situation that I cannot remember now (IIRC it was a file had to be written but the sync depended on it or something).&lt;/p&gt;
+&lt;p&gt;As someone who does a lot of platform engineering, I work with Kubernetes every day, which is a fairly complex system especially when start thinking about the ecosystem. There are various homelab targetted systems that try to address the complexity of Kubernetes. I think many have addressed a lot of the complexity of &lt;em&gt;administrating&lt;/em&gt; Kubernetes, however, I think the workflows they target do not take into account &lt;em&gt;users&lt;/em&gt; of the software.&lt;/p&gt;
+&lt;p&gt;So I gave in, I went back to what I am comfortable with. &lt;em&gt;Kubernetes here I come!&lt;/em&gt;&lt;/p&gt;
+&lt;p&gt;As you saw from a &lt;a href="https://hoshsadiq.github.io/blog/k3s-hetzner-egress-debugging/"
+&gt;blog a few months ago&lt;/a&gt;, I was setting up K3s, but at some point, I got reminded of Talos, and I had always wanted to mess around with it. I had not migrated anything over to the K3s intance yet, so this was the perfect time to try it. I had installed it and getting from zero to Kubernetes was a much smoother installation than K3s. Once installed, I was not really able to configure the system much besides installing ArgoCD for GitOps, as I went travelling for a long while.&lt;/p&gt;
+&lt;h2&gt;The upgrade that broke everything&lt;span class="hx:absolute hx:-mt-20" id="the-upgrade-that-broke-everything"&gt;&lt;/span&gt;
+&lt;a href="#the-upgrade-that-broke-everything" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;But once I sat still for a little, I went back to it, and I had a bunch of upgrades waiting for me. I had a broader 8-step upgrade path planned for the whole stack, and step one was moving Talos from v1.10.4 to v1.10.9 before anything else.&lt;/p&gt;
+&lt;p&gt;The plan was simple:&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;Patch-first: Talos v1.10.4 to v1.10.9.&lt;/li&gt;
+&lt;li&gt;Then step through each Talos minor: v1.11.6, v1.12.9, v1.13.4.&lt;/li&gt;
+&lt;li&gt;Then Kubernetes, one minor at a time: v1.33 to v1.34 to v1.35 to v1.36.&lt;/li&gt;
+&lt;li&gt;Finally, we update &lt;code&gt;talenv.yaml&lt;/code&gt; at the end.&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;Sounds simple! And really it probably would have been if it wasn&amp;rsquo;t for this initial issue.&lt;/p&gt;
+&lt;p&gt;Per the docs, the first step is pretty easy:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;talosctl upgrade --nodes &lt;span class="s2"&gt;&amp;#34;&amp;lt;node-ip&amp;gt;&amp;#34;&lt;/span&gt; --image &lt;span class="s2"&gt;&amp;#34;factory.talos.dev/installer/&amp;lt;schematic&amp;gt;:v1.10.9&amp;#34;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And so the upgrade applied, and it triggered a reboot. But the server never came back. I could not ping it or reach the API.&lt;/p&gt;
+&lt;p&gt;Initially I didn&amp;rsquo;t think much of it. I searched very little, looked at the Hetzner vKVM, but didn&amp;rsquo;t investigate much. Since I had no data on there, I figured it&amp;rsquo;d be a lot easier to just reinstall it. So I did. But not long after I had to do another reboot, and so it happened again. This time we put on our Superman cape, and rescuse it.&lt;/p&gt;
+&lt;h2&gt;Rescue mode investigation&lt;span class="hx:absolute hx:-mt-20" id="rescue-mode-investigation"&gt;&lt;/span&gt;
+&lt;a href="#rescue-mode-investigation" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;So I went digging to understand why this was happening. The system was practically empty, so there was no reason for this to happen.&lt;/p&gt;
+&lt;p&gt;Hetzner lets you boot into a rescue system (PXE-booted Debian) when your server is unresponsive. From there I could inspect the disks directly. The following commands and outputs are excerpts from my rescue host scripts, with wrappers and locale warnings omitted.&lt;/p&gt;
+&lt;p&gt;First thing I checked was whether the disk was even intact:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;NAME SIZE TYPE FSTYPE LABEL MOUNTPOINT
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;loop0 3.8G loop ext2
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;loop1 10M loop ext2
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sda 1.8T disk
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;|&lt;/span&gt;-sda1 100M part crypto_LUKS
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;|&lt;/span&gt;-sda2 1M part
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;|&lt;/span&gt;-sda3 1000M part xfs BOOT
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;|&lt;/span&gt;-sda4 1M part
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="sb"&gt;`&lt;/span&gt;-sda5 1.8T part crypto_LUKS &lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Partitions were all there. The BOOT partition (sda3) mounted fine and contained both the current and upgraded Talos kernel/initramfs (Talos uses A/B slots for upgrades). So the upgrade itself had written successfully. The problem was during boot.&lt;/p&gt;
+&lt;h2&gt;Finding the error&lt;span class="hx:absolute hx:-mt-20" id="finding-the-error"&gt;&lt;/span&gt;
+&lt;a href="#finding-the-error" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;I checked the Talos console, and from there I could see the boot TUI stuck at stage &amp;ldquo;Booting&amp;rdquo;:&lt;/p&gt;
+&lt;p&gt;&lt;img src="https://hoshsadiq.github.io/talos-rescue-mode-all-zero-uuid.png" alt="Talos boot console showing all-zero UUID" loading="lazy" /&gt;&lt;/p&gt;
+&lt;p&gt;The UUID field at the top reads &lt;code&gt;00000000-0000-0000-0000-000000000000&lt;/code&gt;, which looks odd. We will get back to that. More importantly, there is no hostname, Kubernetes status is unknown, and NTP is timing out. The system was alive but stuck: it could not decrypt the STATE partition, so it could not load the machine config, so nothing could proceed. The console showed the zero UUID.&lt;/p&gt;
+&lt;p&gt;The error on the console, transcribed from my notes rather than captured as terminal output:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;error opening encrypted volume: no handlers available to get encryption keys from:
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;1 error occurred: machine UUID 00000000-0000-0000-0000-000000000000 entropy check failed&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;So it seems the UUID is the machine UUID, i.e. the &lt;a href="https://cyberraiden.com/2026/08/03/smbios-uuid/"
+target="_blank" rel="noopener"
+&gt;SMBIOS UUID&lt;/a&gt;.&lt;/p&gt;
+&lt;h2&gt;Why the UUID matters&lt;span class="hx:absolute hx:-mt-20" id="why-the-uuid-matters"&gt;&lt;/span&gt;
+&lt;a href="#why-the-uuid-matters" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Talos&amp;rsquo;s &lt;code&gt;KeyNodeID&lt;/code&gt; encryption works like this:&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;Read the machine&amp;rsquo;s SMBIOS UUID (from DMI/BIOS tables)&lt;/li&gt;
+&lt;li&gt;Combine it with the partition label to form the LUKS passphrase&lt;/li&gt;
+&lt;li&gt;The passphrase format is literally &lt;code&gt;&amp;lt;UUID&amp;gt;&amp;lt;partition_label&amp;gt;&lt;/code&gt;, e.g. &lt;code&gt;&amp;lt;uuid&amp;gt;STATE&lt;/code&gt;&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;Aah, right. Okay, so Talos encrypts the STATE and EPHEMERAL partitions with LUKS, and the encryption key is derived from the machine&amp;rsquo;s SMBIOS UUID combined with the partition label. This is the &lt;a href="https://docs.siderolabs.com/talos/v1.13/configure-your-talos-cluster/storage-and-disk-management/disk-encryption"
+target="_blank" rel="noopener"
+&gt;&lt;code&gt;nodeID&lt;/code&gt; encryption method&lt;/a&gt; in Talos, which ties the disk to the specific hardware it was installed on.&lt;/p&gt;
+&lt;p&gt;This is not a secret key by itself, but since the fixed-label concatenation yields the LUKS passphrase, you should not publish the UUID in a post about the machine. &lt;code&gt;nodeID&lt;/code&gt; binds the disk to the machine, it does not keep the key hidden.&lt;/p&gt;
+&lt;p&gt;If the UUID is all zeros, the passphrase is wrong, LUKS will not open, and the STATE partition (which held the machine config, the node identity, and the saved platform network config) is inaccessible. In fact, Talos has a &lt;a href="https://github.com/siderolabs/talos/blob/main/internal/pkg/encryption/keys/nodeid.go"
+target="_blank" rel="noopener"
+&gt;very basic entropy check&lt;/a&gt; before deriving the key: it counts character frequency in the UUID string, and if any single character appears more than half the string length (strictly more than 18 out of 36 characters), it bails. An all-zero UUID has &lt;code&gt;0&lt;/code&gt; appearing 32 times, so it fails immediately. I suppose this check is there to prevent using a predictable or &amp;ldquo;empty&amp;rdquo; UUID as a key source.&lt;/p&gt;
+&lt;p&gt;So, Talos cannot load its machine config because it is on the encrypted STATE partition, and it cannot decrypt STATE because it is reading a bad UUID.&lt;/p&gt;
+&lt;h2&gt;But the hardware UUID is fine&lt;span class="hx:absolute hx:-mt-20" id="but-the-hardware-uuid-is-fine"&gt;&lt;/span&gt;
+&lt;a href="#but-the-hardware-uuid-is-fine" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;From rescue mode, I checked the actual hardware UUID:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ dmidecode -s system-uuid
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;A perfectly valid UUID. The hardware is reporting it correctly. The rescue system sees it fine. So why does Talos see all zeros? We can even verify this by trying to open the LUKS volume manually.&lt;/p&gt;
+&lt;p&gt;First, a failed attempt with just the UUID:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode excerpt&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nv"&gt;UUID&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nb"&gt;echo&lt;/span&gt; -n &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$UUID&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; cryptsetup open --type luks2 /dev/sda1 talos-state --key-file&lt;span class="o"&gt;=&lt;/span&gt;-
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;No key available with this passphrase.
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nb"&gt;echo&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;exit: &lt;/span&gt;&lt;span class="nv"&gt;$?&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;exit: &lt;span class="m"&gt;2&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And then the correct one with the partition label appended:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode excerpt&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nv"&gt;UUID&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nb"&gt;echo&lt;/span&gt; -n &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;UUID&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;STATE&amp;#34;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; cryptsetup open --type luks2 /dev/sda1 talos-state --key-file&lt;span class="o"&gt;=&lt;/span&gt;-
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ &lt;span class="nb"&gt;echo&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;exit: &lt;/span&gt;&lt;span class="nv"&gt;$?&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;exit: &lt;span class="m"&gt;0&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;That opened it. So why was Talos seeing zeros?&lt;/p&gt;
+&lt;h2&gt;The META partition&lt;span class="hx:absolute hx:-mt-20" id="the-meta-partition"&gt;&lt;/span&gt;
+&lt;a href="#the-meta-partition" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Talos has a small (1MB) metadata partition called META. It stores key-value pairs used during early boot, before the STATE partition is available.&lt;/p&gt;
+&lt;p&gt;It&amp;rsquo;s a binary format where each 256 KB block (ADV) starts with &lt;code&gt;magic1&lt;/code&gt; (&lt;code&gt;0x5a4b3c2d&lt;/code&gt;) and ends with &lt;code&gt;magic2&lt;/code&gt; (&lt;code&gt;0xa5b4c3d2&lt;/code&gt;). There is also a SHA-256 checksum calculated over the entire block with the checksum field itself zeroed out during the calculation. This is why a simple raw writer would fail: if you do not update the checksum and the magic2 trailer, Talos will reject the block as corrupt.&lt;/p&gt;
+&lt;p&gt;Let&amp;rsquo;s see what&amp;rsquo;s on there&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode excerpt&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ mkdir -p /mnt/state
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ mount /dev/mapper/talos-state /mnt/state
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ ls -la /mnt/state
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;total &lt;span class="m"&gt;20&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;drwx------. &lt;span class="m"&gt;2&lt;/span&gt; root root &lt;span class="m"&gt;80&lt;/span&gt; Jun &lt;span class="m"&gt;19&lt;/span&gt; 02:05 .
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;drwxr-xr-x &lt;span class="m"&gt;1&lt;/span&gt; root root &lt;span class="m"&gt;60&lt;/span&gt; Jun &lt;span class="m"&gt;21&lt;/span&gt; 20:46 ..
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;-rw-------. &lt;span class="m"&gt;1&lt;/span&gt; root root &lt;span class="m"&gt;11706&lt;/span&gt; Jun &lt;span class="m"&gt;19&lt;/span&gt; 02:05 config.yaml
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;-rw-------. &lt;span class="m"&gt;1&lt;/span&gt; root root &lt;span class="m"&gt;53&lt;/span&gt; Jun &lt;span class="m"&gt;19&lt;/span&gt; 02:05 node-identity.yaml
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;-r--------. &lt;span class="m"&gt;1&lt;/span&gt; root root &lt;span class="m"&gt;192&lt;/span&gt; Jun &lt;span class="m"&gt;19&lt;/span&gt; 02:05 platform-network.yaml&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;I&amp;rsquo;ve now realised that the data is still there, and I can&amp;rsquo;t just rely on reinstalling. There is something fundamentally wrong with the way Talos interacts with this board. So I ended up searching for the error in the code, and traced it, and then did a few more searches. That&amp;rsquo;s when I landed on issue &lt;a href="https://github.com/siderolabs/talos/issues/9400"
+target="_blank" rel="noopener"
+&gt;siderolabs/talos#9400&lt;/a&gt;, where the authors suggest hardcoding the UUID in the META partition using &lt;code&gt;talosctl meta write&lt;/code&gt;.&lt;/p&gt;
+&lt;h2&gt;Building a tool to write META&lt;span class="hx:absolute hx:-mt-20" id="building-a-tool-to-write-meta"&gt;&lt;/span&gt;
+&lt;a href="#building-a-tool-to-write-meta" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The fix I needed was tag &lt;code&gt;0x0f&lt;/code&gt;: UUIDOverride. If this tag is present in META, Talos uses its value instead of reading from SMBIOS. This is the escape hatch for a machine whose UUID Talos cannot read, whatever the reason.&lt;/p&gt;
+&lt;p&gt;The problem, however, was that &lt;code&gt;talosctl meta write&lt;/code&gt; requires a running Talos API and my Talos is not booting. I needed to write directly to the raw block device from rescue mode. So I dug through the source further, found out how the cli writes the metadata to disk.&lt;/p&gt;
+&lt;p&gt;I had OpenCode write a small Go tool (&lt;a href="https://github.com/hoshsadiq/talos-meta"
+target="_blank" rel="noopener"
+&gt;&lt;code&gt;talos-meta&lt;/code&gt;&lt;/a&gt;) that manages the META binary format and can read/write tags directly to &lt;code&gt;/dev/sda4&lt;/code&gt;. I ended up having to vendor the original Talos META packages for this because a simple raw write would fail without the correct checksum and magic2 trailer. The format uses big-endian encoding for tags and lengths, and each block must end with a specific terminator (0 tag and 0 length) followed by the SHA-256 checksum and the &lt;code&gt;magic2&lt;/code&gt; trailer.&lt;/p&gt;
+&lt;p&gt;Now I can read and write the tags from the META partition.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ /tmp/talos-meta &lt;span class="nb"&gt;read&lt;/span&gt; --device /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:33 META: loading from /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;0x06 upgrade A
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;0x09 stateencryptionconfig &lt;span class="o"&gt;{&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;EncryptionProvider&amp;#34;&lt;/span&gt;:&lt;span class="s2"&gt;&amp;#34;luks2&amp;#34;&lt;/span&gt;,&lt;span class="s2"&gt;&amp;#34;EncryptionKeys&amp;#34;&lt;/span&gt;:&lt;span class="o"&gt;[{&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;KeyStatic&amp;#34;&lt;/span&gt;:null,&lt;span class="s2"&gt;&amp;#34;KeyNodeID&amp;#34;&lt;/span&gt;:&lt;span class="o"&gt;{}&lt;/span&gt;,&lt;span class="s2"&gt;&amp;#34;KeyKMS&amp;#34;&lt;/span&gt;:null,&lt;span class="s2"&gt;&amp;#34;KeySlot&amp;#34;&lt;/span&gt;:0,&lt;span class="s2"&gt;&amp;#34;KeyTPM&amp;#34;&lt;/span&gt;:null&lt;span class="o"&gt;}]&lt;/span&gt;,&lt;span class="s2"&gt;&amp;#34;EncryptionCipher&amp;#34;&lt;/span&gt;:&lt;span class="s2"&gt;&amp;#34;&amp;#34;&lt;/span&gt;,&lt;span class="s2"&gt;&amp;#34;EncryptionKeySize&amp;#34;&lt;/span&gt;:0,&lt;span class="s2"&gt;&amp;#34;EncryptionBlockSize&amp;#34;&lt;/span&gt;:0,&lt;span class="s2"&gt;&amp;#34;EncryptionPerfOptions&amp;#34;&lt;/span&gt;:null&lt;span class="o"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:33 META: loaded &lt;span class="m"&gt;2&lt;/span&gt; keys&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;It had two existing tags:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;0x06&lt;/code&gt;: Upgrade slot indicator (&lt;code&gt;A&lt;/code&gt; or &lt;code&gt;B&lt;/code&gt;)&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;0x09&lt;/code&gt;: StateEncryptionConfig (confirming &lt;code&gt;KeyNodeID&lt;/code&gt; is the encryption method)&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Then from rescue mode we can write the tag directly:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;rescue mode excerpt&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ /tmp/talos-meta write --device /dev/sda4 --tag UUIDOverride --value &lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: loading from /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: loaded &lt;span class="m"&gt;2&lt;/span&gt; keys
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: saving to /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: saved &lt;span class="m"&gt;3&lt;/span&gt; keys
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: loading from /dev/sda4
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;written: 0x0f &lt;span class="o"&gt;(&lt;/span&gt;uuidoverride&lt;span class="o"&gt;)&lt;/span&gt; &lt;span class="o"&gt;=&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;verified: read-back matches
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;2026/06/21 22:50:57 META: loaded &lt;span class="m"&gt;3&lt;/span&gt; keys&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;This writes the UUID override to both the primary and backup regions of the META partition. In my case I just used the UUID from system uuid.&lt;/p&gt;
+&lt;h2&gt;Finally???&lt;span class="hx:absolute hx:-mt-20" id="finally"&gt;&lt;/span&gt;
+&lt;a href="#finally" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;After writing the UUID override, I rebooted. But it&amp;rsquo;s still not working. I then booted into the vKVM guest with the same passed-through disk, and this time the API and health checks came up. The guest successfully proved the META override was usable to decrypt the partition there and it was finally able to decrypt the STATE partition and load the configuration.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ talosctl get systeminformation --nodes &lt;span class="s2"&gt;&amp;#34;&amp;lt;node-ip&amp;gt;&amp;#34;&lt;/span&gt; -o yaml
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;node: &lt;span class="s2"&gt;&amp;#34;123.123.123.123&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;metadata:
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; namespace: hardware
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; type: SystemInformations.hardware.talos.dev
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; id: systeminformation
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; version: &lt;span class="m"&gt;1&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; owner: hardware.SystemInfoController
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; phase: running
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; created: 2026-06-21T21:08:51Z
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; updated: 2026-06-21T21:08:51Z
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;spec:
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; manufacturer: QEMU
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; productName: Standard PC &lt;span class="o"&gt;(&lt;/span&gt;Q35 + ICH9, 2009&lt;span class="o"&gt;)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; version: pc-q35-7.2
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; uuid: &lt;span class="s2"&gt;&amp;#34;bc94b891-0df9-47d8-a7d3-c7c199d66b0e&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; wakeUpType: Power Switch&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The cluster was healthy:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ talosctl health --nodes &lt;span class="s2"&gt;&amp;#34;123.123.123.123&amp;#34;&lt;/span&gt; --wait-timeout 5m
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;discovered nodes: &lt;span class="o"&gt;[&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;123.123.123.123&amp;#34;&lt;/span&gt;&lt;span class="o"&gt;]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; etcd to be healthy: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; etcd members to be consistent across nodes: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; apid to be ready: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; kubelet to be healthy: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;waiting &lt;span class="k"&gt;for&lt;/span&gt; all k8s nodes to report ready: OK
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;...&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;And kubectl confirmed the node was Ready:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ kubectl get nodes --server &lt;span class="s2"&gt;&amp;#34;https://123.123.123.123:6443&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;NAME STATUS ROLES AGE VERSION
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;talos-homelab-cp0 Ready control-plane 2d21h v1.33.11&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Now I need to understand why it refuses to boot outside of vKVM.&lt;/p&gt;
+&lt;h2&gt;The bare metal complication&lt;span class="hx:absolute hx:-mt-20" id="the-bare-metal-complication"&gt;&lt;/span&gt;
+&lt;a href="#the-bare-metal-complication" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The vKVM success was encouraging but not the end. When I exited vKVM and let the server boot on bare metal, it had a different problem: networking did not come up.&lt;/p&gt;
+&lt;p&gt;To understand why, I ended up getting physical KVM access so I was able to observe what was going on when the system boots up in its natural habitat (directly on the hardware). This doubly confirmed out UUID fix, but the networking is not coming up at all. This explains why Talos doesn&amp;rsquo;t boot. Within the TUI, you can confirm the network by pressing F3.&lt;/p&gt;
+&lt;p&gt;&lt;img src="https://hoshsadiq.github.io/talos-bare-metal-no-gateway.png" alt="Talos not network" loading="lazy" /&gt;&lt;/p&gt;
+&lt;p&gt;I didn&amp;rsquo;t capture it, but on bare metal, during boot, it was trying to start networking with &lt;code&gt;eth0&lt;/code&gt;, but this did not exist, so the address, route and gateway never applied. The gateway itself was valid. The config just attached to an interface that was not there. The system could boot and decrypt the disks, but it could not reach the network to join the cluster or even respond to &lt;code&gt;talosctl&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;Hetzner&amp;rsquo;s vKVM network-boots a small Debian rescue system, which then starts your installed OS as a QEMU/KVM guest with the physical disks passed straight through. After checking the cmdline, I looked at the cmdline, and saw &lt;code&gt;net.ifnames=0&lt;/code&gt; was there, which turns off predictable interface names.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div class="hextra-code-filename not-prose" dir="auto"&gt;/proc/cmdline&lt;/div&gt;&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;initrd=initrd.img nfsdir=[2a01:4ff:ff00::b007:1]:/nfs RFILE=rescue-amd64-bookworm-v012.ext2 VKVM=vkvm64-bookworm-overlay.ext2 HASH=$6$&amp;lt;redacted&amp;gt; CUSTOM_PASSWORD=true net.ifnames=0 vga=0x317 lang=de quiet IP6=2a01:4f8:120:84e6:: IP6MASK=64 IP6GW=fe80::1 keyboard=us BOOTIF=01-90:1b:0e:e0:d7:06&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-8"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Bare metal Talos is different. Its GRUB entry has no such flag:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;$ grep -c &lt;span class="s2"&gt;&amp;#34;net.ifnames&amp;#34;&lt;/span&gt; /mnt/boot/grub/grub.cfg
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="m"&gt;0&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Somewhere somehow, something happened that caused Talos to configure itself with the old unpredictable interface. My guess is the vKVM qemu instance uses virtio NIC, and caused it to write to the network config, but the real hardware is an Intel NIC, which may have caused it to only register on the predictable device path. Regardless, I hardcoded the interface to the correct one via the TUI, rebooted, and voila we&amp;rsquo;re back.&lt;/p&gt;
+&lt;p&gt;Lastly, I changed the interface in &lt;code&gt;config.yaml&lt;/code&gt; from &lt;code&gt;eth0&lt;/code&gt; to &lt;code&gt;enp0s31f6&lt;/code&gt;, committed that.&lt;/p&gt;
+&lt;h2&gt;Lessons&lt;span class="hx:absolute hx:-mt-20" id="lessons"&gt;&lt;/span&gt;
+&lt;a href="#lessons" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;&lt;strong&gt;Take a backup before writing to META.&lt;/strong&gt; I did not &lt;code&gt;dd&lt;/code&gt; the META partition before modifying it. The tool read the existing tags and wrote them back with the new one, and the read-back confirmed all three were intact, so nothing was lost. But I should have taken a copy first. &lt;code&gt;dd if=/dev/sda4 of=/tmp/meta-backup.bin&lt;/code&gt; would have taken seconds and given me a way back if the write had gone wrong. Note that &lt;code&gt;/tmp&lt;/code&gt; in the rescue RAM is volatile; any backup stored there must be copied to a remote host before rebooting, or it will be lost.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Talos&amp;rsquo;s UUID override exists for a reason.&lt;/strong&gt; The &lt;code&gt;0x0f&lt;/code&gt; META tag is there for machines whose UUID Talos cannot read. It works regardless of why the UUID is wrong, so it&amp;rsquo;s worth always hardcoding it.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Get the right console for bare metal.&lt;/strong&gt; vKVM runs your installed OS as a QEMU guest, so it only shows you the guest, not the physical boot. To watch a physical boot you need the real KVM console. I spent time looking at the wrong screen because of this.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;The &lt;code&gt;reclaim-the-stack/talos-manager&lt;/code&gt; project exists.&lt;/strong&gt; It&amp;rsquo;s a tool that handles exactly this Hetzner UUID problem (among other Talos management tasks). Worth looking at if you&amp;rsquo;re running Talos on Hetzner at any scale.&lt;/p&gt;
+&lt;h2&gt;References&lt;span class="hx:absolute hx:-mt-20" id="references"&gt;&lt;/span&gt;
+&lt;a href="#references" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;&lt;a href="https://docs.siderolabs.com/talos/v1.13/configure-your-talos-cluster/storage-and-disk-management/disk-encryption"
+target="_blank" rel="noopener"
+&gt;Talos disk encryption docs&lt;/a&gt;: &lt;code&gt;KeyNodeID&lt;/code&gt; encryption method explanation&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://github.com/siderolabs/talos/blob/main/internal/pkg/encryption/keys/nodeid.go"
+target="_blank" rel="noopener"
+&gt;UUID entropy check source&lt;/a&gt;: the character frequency check that rejects all-zero UUIDs&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://github.com/siderolabs/talos/commit/6eade3d5e"
+target="_blank" rel="noopener"
+&gt;Commit adding UUID override (META key 0x0f)&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://docs.siderolabs.com/talos/v1.13/learn-more/architecture"
+target="_blank" rel="noopener"
+&gt;Talos architecture docs&lt;/a&gt;: META partition layout and purpose&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://github.com/siderolabs/talos/blob/main/pkg/machinery/meta/constants.go"
+target="_blank" rel="noopener"
+&gt;META partition constants&lt;/a&gt;: tag definitions (0x06 Upgrade, 0x09 StateEncryptionConfig, 0x0f UUIDOverride)&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://docs.siderolabs.com/talos/v1.13/platform-specific-installations/bare-metal-platforms/metal-network-configuration"
+target="_blank" rel="noopener"
+&gt;Metal network configuration&lt;/a&gt;: &lt;code&gt;talosctl meta write&lt;/code&gt; for network config on bare metal&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://github.com/reclaim-the-stack/talos-manager"
+target="_blank" rel="noopener"
+&gt;reclaim-the-stack/talos-manager&lt;/a&gt;: documents the Hetzner UUID scenario and other Talos management tasks&lt;/li&gt;
+&lt;/ul&gt;</description></item></channel></rss>
