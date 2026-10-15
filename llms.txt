@@ -13,5 +13,5 @@
 - [Conference Talks](https://hoshsadiq.github.io/talks/): Talks I&rsquo;ve given or co-presented at conferences and meetups, mostly about infrastructure, … - Published 2026-02-06
 
 ---
-Generated on 2026-09-24 21:33:46 UTC
+Generated on 2026-10-16 02:18:57 UTC
 Site: https://hoshsadiq.github.io/
